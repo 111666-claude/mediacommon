@@ -461,6 +461,10 @@ func (s *SPS) Unmarshal(buf []byte) error {
 		return fmt.Errorf("not a SPS")
 	}
 
+	// reset the struct in order to support reusing it
+	// with multiple SPSs.
+	*s = SPS{}
+
 	buf = EmulationPreventionRemove(buf[1:])
 
 	if len(buf) < 3 {
@@ -740,7 +744,7 @@ func (s SPS) Width() int {
 
 	var cropUnitX uint32
 	if chromaArrayType == 0 {
-		cropUnitX = 0
+		cropUnitX = 1
 	} else {
 		cropUnitX = subWidthC
 	}

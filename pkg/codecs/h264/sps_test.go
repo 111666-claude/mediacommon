@@ -427,6 +427,39 @@ var casesSPS = []struct {
 		25,
 	},
 	{
+		"1366x766 monochrome",
+		[]byte{
+			0x67, 0x64, 0x00, 0x1f, 0xf3, 0xa0, 0x15, 0x81,
+			0x87, 0x8b, 0xb8, 0x40, 0x00, 0x00, 0x03, 0x00,
+			0x40, 0x00, 0x00, 0x0c, 0xa1,
+		},
+		h264.SPS{
+			ProfileIdc:                  100,
+			LevelIdc:                    31,
+			ChromaFormatIdc:             0,
+			Log2MaxPicOrderCntLsbMinus4: 0,
+			MaxNumRefFrames:             1,
+			PicWidthInMbsMinus1:         85,
+			PicHeightInMapUnitsMinus1:   47,
+			FrameMbsOnlyFlag:            true,
+			Direct8x8InferenceFlag:      true,
+			FrameCropping: &h264.SPS_FrameCropping{
+				RightOffset:  10,
+				BottomOffset: 2,
+			},
+			VUI: &h264.SPS_VUI{
+				TimingInfo: &h264.SPS_TimingInfo{
+					NumUnitsInTick:     1,
+					TimeScale:          50,
+					FixedFrameRateFlag: true,
+				},
+			},
+		},
+		1366,
+		766,
+		25,
+	},
+	{
 		"1920x1080 mbs_only_flag = 0",
 		[]byte{
 			0x67, 0x4d, 0x40, 0x28, 0xab, 0x60, 0x3c, 0x02,
@@ -495,6 +528,66 @@ func TestSPSUnmarshal(t *testing.T) {
 			require.Equal(t, ca.height, sps.Height())
 			require.Equal(t, ca.fps, sps.FPS())
 		})
+	}
+}
+
+func TestSPSUnmarshalErrors(t *testing.T) {
+	for _, ca := range []struct {
+		name string
+		byts []byte
+		err  string
+	}{
+		{
+			"empty",
+			[]byte{},
+			"not enough bits",
+		},
+		{
+			"not a SPS",
+			[]byte{0x65, 0x88, 0x84, 0x00},
+			"not a SPS",
+		},
+		{
+			"too short after header",
+			[]byte{0x67, 0x64},
+			"not enough bits",
+		},
+		{
+			"truncated rbsp",
+			[]byte{0x67, 0x64, 0x00, 0x1f, 0xf3, 0xa0},
+			"not enough bits",
+		},
+		{
+			"invalid pic_order_cnt_type",
+			[]byte{0x67, 0x64, 0x00, 0x1f, 0xf2, 0x48},
+			"invalid pic_order_cnt_type: 3",
+		},
+	} {
+		t.Run(ca.name, func(t *testing.T) {
+			var sps h264.SPS
+			err := sps.Unmarshal(ca.byts)
+			require.EqualError(t, err, ca.err)
+		})
+	}
+}
+
+func TestSPSReuse(t *testing.T) {
+	var sps h264.SPS
+
+	for i := 0; i < 2; i++ {
+		for _, ca := range casesSPS {
+			err := sps.Unmarshal(ca.byts)
+			require.NoError(t, err)
+			require.Equal(t, ca.sps, sps)
+			require.Equal(t, ca.width, sps.Width())
+			require.Equal(t, ca.height, sps.Height())
+			require.Equal(t, ca.fps, sps.FPS())
+
+			// queries must be stable across repetitions
+			require.Equal(t, ca.width, sps.Width())
+			require.Equal(t, ca.height, sps.Height())
+			require.Equal(t, ca.fps, sps.FPS())
+		}
 	}
 }
 

@@ -111,8 +111,11 @@ func getPTSDTSDiff(buf []byte, sps *SPS, pps *PPS) (int, error) {
 			return -len(rps.DeltaPocS1), nil
 
 		case NALUType_TRAIL_R, NALUType_TSA_R, NALUType_STSA_R, NALUType_RASL_R:
+			// an empty S0 list is valid when the picture only references
+			// long-term reference pictures; in that case the reordering
+			// distance comes from the positive (S1) list only.
 			if len(rps.DeltaPocS0) == 0 {
-				return 0, fmt.Errorf("invalid DeltaPocS0")
+				return -len(rps.DeltaPocS1), nil
 			}
 			return int(-rps.DeltaPocS0[0]-1) - len(rps.DeltaPocS1), nil
 
@@ -120,8 +123,11 @@ func getPTSDTSDiff(buf []byte, sps *SPS, pps *PPS) (int, error) {
 			return 0, nil
 		}
 	} else { // I or P-frame
+		// an empty S0 list is valid when the picture only references
+		// long-term reference pictures; there is no short-term picture to
+		// reorder against, so the PTS-DTS difference is zero.
 		if len(rps.DeltaPocS0) == 0 {
-			return 0, fmt.Errorf("invalid DeltaPocS0")
+			return 0, nil
 		}
 		return int(-rps.DeltaPocS0[0] - 1), nil
 	}

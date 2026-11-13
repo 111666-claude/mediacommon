@@ -193,6 +193,10 @@ type Reader struct {
 	dem           *robustDemuxer
 	onDecodeError ReaderOnDecodeErrorFunc
 	onData        map[uint16]func(int64, int64, []byte) error
+
+	// latest StreamMuxConfig found on each LATM PID,
+	// used to decode audioMuxElements with useSameStreamMux = 1.
+	latmConfigs map[uint16]*mpeg4audio.StreamMuxConfig
 }
 
 // Initialize initializes a Reader.
@@ -231,6 +235,7 @@ func (r *Reader) Initialize() error {
 
 	r.onDecodeError = func(_ error) {}
 	r.onData = make(map[uint16]func(int64, int64, []byte) error)
+	r.latmConfigs = make(map[uint16]*mpeg4audio.StreamMuxConfig)
 
 	return nil
 }
@@ -426,8 +431,27 @@ func (r *Reader) OnDataMPEG4AudioLATM(track *Track, cb ReaderOnDataMPEG4AudioLAT
 		var s mpeg4audio.AudioSyncStream
 		err := s.Unmarshal(data)
 		if err != nil {
-			r.onDecodeError(err)
+			r.onDecodeError(fmt.Errorf("invalid LATM AudioSyncStream: %w", err))
 			return nil
+		}
+
+		// Decode every audioMuxElement so that invalid data is reported,
+		// while reusing the latest StreamMuxConfig for useSameStreamMux elements.
+		// The raw elements handed to the callback are left untouched.
+		for i, el := range s.AudioMuxElements {
+			var element mpeg4audio.AudioMuxElement
+			element.MuxConfigPresent = true
+			element.StreamMuxConfig = r.latmConfigs[track.PID]
+
+			err = element.Unmarshal(el)
+			if err != nil {
+				r.onDecodeError(fmt.Errorf("invalid LATM audioMuxElement %d: %w", i, err))
+				return nil
+			}
+
+			if element.StreamMuxConfig != nil {
+				r.latmConfigs[track.PID] = element.StreamMuxConfig
+			}
 		}
 
 		return cb(pts, s.AudioMuxElements)

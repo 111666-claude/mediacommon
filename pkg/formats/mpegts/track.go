@@ -100,6 +100,57 @@ func findEAC3Parameters(dem *robustDemuxer, pid uint16) (int, int, error) {
 	}
 }
 
+// findMPEG4AudioLATMConfig scans the stream once and returns the first complete
+// StreamMuxConfig found in an audioMuxElement. The first element carrying a
+// configuration establishes it; later useSameStreamMux elements reuse it.
+// Isolated malformed PES packets and forward useSameStreamMux references
+// encountered before the configuration are skipped, mirroring the tolerant
+// reading path. If no configuration can be found, the last concrete decode
+// error is returned wrapped in a traceable message rather than an empty success.
+// The scan is linear: every packet up to the first configured one is read once.
+func findMPEG4AudioLATMConfig(dem *robustDemuxer, pid uint16) (*mpeg4audio.StreamMuxConfig, error) {
+	var lastErr error
+
+	for {
+		data, err := dem.nextData()
+		if err != nil {
+			if lastErr != nil {
+				return nil, fmt.Errorf("unable to find an MPEG-4 Audio LATM StreamMuxConfig in PID %d: %w", pid, lastErr)
+			}
+			return nil, fmt.Errorf("unable to find an MPEG-4 Audio LATM StreamMuxConfig in PID %d: %w", pid, err)
+		}
+
+		if data.PES == nil || data.PID != pid {
+			continue
+		}
+
+		var syncStream mpeg4audio.AudioSyncStream
+		err = syncStream.Unmarshal(data.PES.Data)
+		if err != nil {
+			// tolerate an isolated corrupted PES and keep looking for a valid one.
+			lastErr = fmt.Errorf("invalid LATM AudioSyncStream in PID %d: %w", pid, err)
+			continue
+		}
+
+		for i, el := range syncStream.AudioMuxElements {
+			var element mpeg4audio.AudioMuxElement
+			element.MuxConfigPresent = true
+
+			err = element.Unmarshal(el)
+			if err != nil {
+				// tolerate elements that cannot be decoded before any
+				// configuration is available and keep scanning.
+				lastErr = fmt.Errorf("invalid LATM audioMuxElement %d in PID %d: %w", i, pid, err)
+				continue
+			}
+
+			if element.StreamMuxConfig != nil {
+				return element.StreamMuxConfig, nil
+			}
+		}
+	}
+}
+
 func findRegistrationIdentifier(descriptors []*astits.Descriptor) (uint32, bool) {
 	ret := uint32(0)
 
@@ -197,7 +248,14 @@ func findCodec(dem *robustDemuxer, es *astits.PMTElementaryStream) (codecs.Codec
 		}, nil
 
 	case astits.StreamTypeAACLATMAudio:
-		return &codecs.MPEG4AudioLATM{}, nil
+		conf, err := findMPEG4AudioLATMConfig(dem, es.ElementaryPID)
+		if err != nil {
+			return nil, err
+		}
+
+		return &codecs.MPEG4AudioLATM{
+			StreamMuxConfig: *conf,
+		}, nil
 
 	case astits.StreamTypeMPEG1Audio:
 		return &codecs.MPEG1Audio{}, nil

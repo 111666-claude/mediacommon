@@ -262,6 +262,10 @@ type SequenceHeader struct {
 
 // Unmarshal decodes a SequenceHeader.
 func (h *SequenceHeader) Unmarshal(buf []byte) error {
+	// reset the struct in order to avoid leaking state
+	// when reusing the same object for multiple parses.
+	*h = SequenceHeader{}
+
 	var oh OBUHeader
 	err := oh.Unmarshal(buf)
 	if err != nil {
@@ -310,6 +314,7 @@ func (h *SequenceHeader) Unmarshal(buf []byte) error {
 		h.SeqTier = []bool{false}
 		h.DecoderModelPresentForThisOp = []bool{false}
 		h.InitialDisplayPresentForThisOp = []bool{false}
+		h.InitialDisplayDelayMinus1 = []uint8{0}
 	} else {
 		var timingInfoPresentFlag bool
 		timingInfoPresentFlag, err = bits.ReadFlag(buf, &pos)

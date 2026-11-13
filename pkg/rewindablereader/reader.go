@@ -10,19 +10,21 @@ const (
 	defaultMaxSize = 1 * 1024 * 1024
 )
 
-// Reader is a reader that can be (and must be) rewinded once.
+// Reader is a reader that can be rewinded.
 type Reader struct {
 	R       io.Reader
 	MaxSize int
 
 	entries  [][]byte
 	size     int
-	rewinded bool
+	rewound  bool
+	entryIdx int
+	entryOff int
 }
 
 // Read implements io.Reader.
 func (r *Reader) Read(p []byte) (int, error) {
-	if !r.rewinded {
+	if !r.rewound {
 		if r.MaxSize == 0 {
 			r.MaxSize = defaultMaxSize
 		}
@@ -33,27 +35,29 @@ func (r *Reader) Read(p []byte) (int, error) {
 			return 0, errors.New("max recorded size exceeded")
 		}
 
+		// empty reads must not alter the recorded data, its size or the
+		// boundaries between recorded entries.
 		if n > 0 {
 			entry := make([]byte, n)
 			copy(entry, p[:n])
 			r.entries = append(r.entries, entry)
 			r.size += n
 		}
+
 		return n, err
 	}
 
-	if r.entries != nil {
-		entry := r.entries[0]
+	// replay recorded data. The position is kept separately from the entries,
+	// so that Rewind can be called any number of times without losing data.
+	if r.entryIdx < len(r.entries) {
+		entry := r.entries[r.entryIdx][r.entryOff:]
 		n := copy(p, entry)
 
-		if n != len(entry) {
-			r.entries[0] = entry[n:]
+		if n == len(entry) {
+			r.entryIdx++
+			r.entryOff = 0
 		} else {
-			r.entries = r.entries[1:]
-
-			if len(r.entries) == 0 {
-				r.entries = nil // release entries from memory
-			}
+			r.entryOff += n
 		}
 
 		return n, nil
@@ -62,7 +66,12 @@ func (r *Reader) Read(p []byte) (int, error) {
 	return r.R.Read(p)
 }
 
-// Rewind rewinds the reader. This can be (and must be) called once.
+// Rewind rewinds the reader, causing recorded data to be read again.
+// It can be called any number of times. Once recorded data has been
+// replayed, reads continue from the underlying reader, which is never
+// re-read implicitly.
 func (r *Reader) Rewind() {
-	r.rewinded = true
+	r.rewound = true
+	r.entryIdx = 0
+	r.entryOff = 0
 }

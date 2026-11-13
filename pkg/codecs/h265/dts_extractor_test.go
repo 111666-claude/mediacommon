@@ -1055,6 +1055,150 @@ func TestDTSExtractor(t *testing.T) {
 	}
 }
 
+func findDTSExtractorCase(t *testing.T, name string) []sequenceSample {
+	t.Helper()
+	for _, ca := range casesDTSExtractor {
+		if ca.name == name {
+			return ca.sequence
+		}
+	}
+	t.Fatalf("case not found: %s", name)
+	return nil
+}
+
+func TestDTSExtractorErrors(t *testing.T) {
+	seq := findDTSExtractorCase(t, "issue mediamtx/6063 (long-term reference pictures)")
+	vps := seq[0].au[0]
+	sps := seq[0].au[1]
+	pps := seq[0].au[2]
+	idr := seq[0].au[3]
+	trailR := seq[1].au[0]
+
+	t.Run("SPS not received yet", func(t *testing.T) {
+		ex := NewDTSExtractor()
+		_, err := ex.Extract([][]byte{trailR}, 3000)
+		require.EqualError(t, err, "SPS not received yet")
+	})
+
+	t.Run("PPS not received yet", func(t *testing.T) {
+		ex := NewDTSExtractor()
+		_, err := ex.Extract([][]byte{vps, sps, trailR}, 3000)
+		require.EqualError(t, err, "PPS not received yet")
+	})
+
+	t.Run("invalid SPS", func(t *testing.T) {
+		ex := NewDTSExtractor()
+		_, err := ex.Extract([][]byte{vps, {0x42, 0x01, 0x01}, pps, idr}, 0)
+		require.ErrorContains(t, err, "invalid SPS")
+	})
+
+	t.Run("invalid PPS", func(t *testing.T) {
+		ex := NewDTSExtractor()
+		_, err := ex.Extract([][]byte{vps, sps, {0x44, 0x01}, idr}, 0)
+		require.ErrorContains(t, err, "invalid PPS")
+	})
+
+	t.Run("random access frame not received yet", func(t *testing.T) {
+		ex := NewDTSExtractor()
+		_, err := ex.Extract([][]byte{vps, sps, pps, trailR}, 3000)
+		require.EqualError(t, err, "random access frame not received yet")
+	})
+
+	t.Run("access unit without VCL NALU", func(t *testing.T) {
+		ex := NewDTSExtractor()
+		_, err := ex.Extract(seq[0].au, 0)
+		require.NoError(t, err)
+
+		_, err = ex.Extract([][]byte{{0x4e, 0x01, 0x00, 0x0a}}, 3000) // prefix SEI only
+		require.EqualError(t, err, "access unit doesn't contain an IDR or non-IDR NALU")
+	})
+
+	t.Run("truncated NALU then recovery", func(t *testing.T) {
+		ex := NewDTSExtractor()
+		dts, err := ex.Extract(seq[0].au, 0)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), dts)
+
+		_, err = ex.Extract([][]byte{{0x02, 0x03}}, 3000)
+		require.Error(t, err)
+
+		// a failed extraction must not poison the extractor:
+		// the next valid access unit has to be processed normally.
+		dts, err = ex.Extract(seq[1].au, 3000)
+		require.NoError(t, err)
+		require.Equal(t, int64(3000), dts)
+
+		dts, err = ex.Extract(seq[2].au, 6000)
+		require.NoError(t, err)
+		require.Equal(t, int64(6000), dts)
+	})
+
+	t.Run("DTS is not monotonically increasing", func(t *testing.T) {
+		ex := NewDTSExtractor()
+		_, err := ex.Extract(seq[0].au, 0)
+		require.NoError(t, err)
+
+		_, err = ex.Extract(seq[1].au, 3000)
+		require.NoError(t, err)
+
+		_, err = ex.Extract(seq[2].au, 100)
+		require.ErrorContains(t, err, "DTS is not monotonically increasing")
+	})
+}
+
+func TestDTSExtractorSecondGOP(t *testing.T) {
+	seq := findDTSExtractorCase(t, "issue mediamtx/6063 (long-term reference pictures)")
+
+	ex := NewDTSExtractor()
+
+	var prevDTS int64
+
+	// play the same GOP twice: DTS must stay monotonic across the
+	// keyframe reset that starts the second GOP.
+	for gop := 0; gop < 2; gop++ {
+		for i, sample := range seq {
+			ptsOffset := int64(0)
+			if gop == 1 {
+				ptsOffset = 18000 - seq[0].pts
+			}
+
+			dts, err := ex.Extract(sample.au, sample.pts+ptsOffset)
+			require.NoError(t, err)
+
+			// this sequence has no reordering: DTS must equal PTS.
+			require.Equal(t, sample.pts+ptsOffset, dts)
+
+			if gop != 0 || i != 0 {
+				require.Greater(t, dts, prevDTS)
+			}
+			prevDTS = dts
+		}
+	}
+
+	require.Equal(t, int64(33000), prevDTS)
+}
+
+func TestDTSExtractorManyNALUs(t *testing.T) {
+	seq := findDTSExtractorCase(t, "issue mediamtx/6063 (long-term reference pictures)")
+
+	ex := NewDTSExtractor()
+
+	dts, err := ex.Extract(seq[0].au, 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), dts)
+
+	// extraction cost must not depend on the number of previously
+	// processed access units; this also checks that DTS stays
+	// monotonic and locked to PTS over a long stream.
+	const n = 6000
+	for i := 1; i <= n; i++ {
+		pts := int64(i) * 3000
+		dts, err := ex.Extract(seq[1].au, pts)
+		require.NoError(t, err)
+		require.Equal(t, pts, dts)
+	}
+}
+
 func serializeSequence(seq []sequenceSample) []byte {
 	var buf []byte //nolint:prealloc
 

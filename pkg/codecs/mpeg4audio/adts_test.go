@@ -224,6 +224,11 @@ func TestADTSUnmarshalErrors(t *testing.T) {
 		err  string
 	}{
 		{
+			"empty",
+			nil,
+			"invalid length",
+		},
+		{
 			"frame_length equal to header length",
 			[]byte{0xff, 0xf1, 0x4c, 0x80, 0x00, 0xff, 0xfc, 0x00},
 			"invalid FrameLen",
@@ -296,4 +301,101 @@ func FuzzADTSUnmarshal(f *testing.F) {
 		_, err = pkts.Marshal()
 		require.NoError(t, err)
 	})
+}
+
+// ADTS frames with and without crc_check, as used by the large stream tests below.
+var (
+	adtsFrameWithCRC = []byte{
+		0xff, 0xf0, 0x4c, 0x80, 0x01, 0x7f, 0xfc, // header, frame_length = 11
+		0x12, 0x34, // crc_check
+		0xaa, 0xbb, // AU
+	}
+	adtsFrameWithoutCRC = []byte{
+		0xff, 0xf1, 0x4c, 0x80, 0x01, 0x3f, 0xfc, // header, frame_length = 9
+		0xaa, 0xbb, // AU
+	}
+)
+
+func TestADTSUnmarshalLargeStream(t *testing.T) {
+	// alternating frames with and without crc_check: parsing must stay in
+	// sync and every access unit must be returned exactly once.
+	stream := make([]byte, 0, 6000*len(adtsFrameWithCRC))
+	for i := 0; i < 6000; i++ {
+		if i%2 == 0 {
+			stream = append(stream, adtsFrameWithCRC...)
+		} else {
+			stream = append(stream, adtsFrameWithoutCRC...)
+		}
+	}
+
+	var pkts mpeg4audio.ADTSPackets
+	err := pkts.Unmarshal(stream)
+	require.NoError(t, err)
+	require.Len(t, pkts, 6000)
+
+	pos := 0
+	for i, pkt := range pkts {
+		require.Equal(t, mpeg4audio.ObjectTypeAACLC, pkt.Type)
+		require.Equal(t, 48000, pkt.SampleRate)
+		require.Equal(t, uint8(2), pkt.ChannelConfig)
+		require.Equal(t, 2, pkt.ChannelCount)
+		require.Equal(t, []byte{0xaa, 0xbb}, pkt.AU)
+
+		// the AU must be a slice of the input buffer, not a copy:
+		// its backing array starts at the raw_data_block offset.
+		headerLen := 7
+		if i%2 == 0 {
+			headerLen = 9 // crc_check is present
+		}
+		require.Equal(t, stream[pos+headerLen:pos+headerLen+2], pkt.AU)
+		pos += headerLen + 2
+	}
+	require.Equal(t, len(stream), pos)
+}
+
+func TestADTSUnmarshalNoStatePollution(t *testing.T) {
+	// every Unmarshal call is independent: a frame with crc_check must not
+	// change how the next call parses a frame without crc_check, and the
+	// returned access units must alias the input buffer rather than copy it.
+	first := mpeg4audio.ADTSPackets{}
+	require.NoError(t, first.Unmarshal(adtsFrameWithCRC))
+	require.Equal(t, []byte{0xaa, 0xbb}, first[0].AU)
+
+	second := mpeg4audio.ADTSPackets{}
+	require.NoError(t, second.Unmarshal(adtsFrameWithoutCRC))
+	require.Equal(t, []byte{0xaa, 0xbb}, second[0].AU)
+
+	// the AU aliases the input buffer: the parser must not copy parsed bytes
+	require.Equal(t, &adtsFrameWithoutCRC[7], &second[0].AU[0])
+
+	// reuse the same destination slice: already parsed packets are preserved
+	// and the new frame is appended after them.
+	require.NoError(t, first.Unmarshal(adtsFrameWithoutCRC))
+	require.Len(t, first, 2)
+	require.Equal(t, []byte{0xaa, 0xbb}, first[0].AU)
+	require.Equal(t, []byte{0xaa, 0xbb}, first[1].AU)
+}
+
+func BenchmarkADTSUnmarshal(b *testing.B) {
+	// 6000 alternating frames with and without crc_check.
+	stream := make([]byte, 0, 6000*len(adtsFrameWithCRC))
+	for i := 0; i < 6000; i++ {
+		if i%2 == 0 {
+			stream = append(stream, adtsFrameWithCRC...)
+		} else {
+			stream = append(stream, adtsFrameWithoutCRC...)
+		}
+	}
+
+	b.SetBytes(int64(len(stream)))
+	for b.Loop() {
+		var pkts mpeg4audio.ADTSPackets
+		err := pkts.Unmarshal(stream)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(pkts) != 6000 {
+			b.Fatalf("unexpected packet count: %d", len(pkts))
+		}
+	}
 }

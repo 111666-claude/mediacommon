@@ -527,6 +527,173 @@ var casesSPS = []struct {
 		766,
 		25,
 	},
+	{
+		// monochrome (ChromaFormatIdc=0), frame_mbs_only_flag=1, cropped.
+		// Crop units must be 1x1 luma samples, like 4:4:4, so that the
+		// offsets are applied the same way as in color streams.
+		"1280x720 monochrome cropped",
+		[]byte{
+			0x67, 0x64, 0x00, 0x1f, 0xf3, 0xa0, 0x14, 0x01,
+			0x6f, 0x29, 0xd8, 0x94,
+		},
+		h264.SPS{
+			ProfileIdc:                  100,
+			LevelIdc:                    31,
+			ChromaFormatIdc:             0,
+			Log2MaxPicOrderCntLsbMinus4: 0,
+			MaxNumRefFrames:             1,
+			PicWidthInMbsMinus1:         79,
+			PicHeightInMapUnitsMinus1:   44,
+			FrameMbsOnlyFlag:            true,
+			Direct8x8InferenceFlag:      true,
+			FrameCropping: &h264.SPS_FrameCropping{
+				LeftOffset:   4,
+				RightOffset:  6,
+				TopOffset:    2,
+				BottomOffset: 8,
+			},
+		},
+		1270,
+		710,
+		0,
+	},
+	{
+		// monochrome, frame_mbs_only_flag=0: vertical crop unit stays
+		// 2 luma samples, exactly as in interlaced color streams.
+		"1280x720 monochrome interlaced cropped",
+		[]byte{
+			0x67, 0x64, 0x00, 0x1f, 0xf3, 0xa0, 0x14, 0x02,
+			0xe6, 0x53, 0xb1, 0x28,
+		},
+		h264.SPS{
+			ProfileIdc:                  100,
+			LevelIdc:                    31,
+			ChromaFormatIdc:             0,
+			Log2MaxPicOrderCntLsbMinus4: 0,
+			MaxNumRefFrames:             1,
+			PicWidthInMbsMinus1:         79,
+			PicHeightInMapUnitsMinus1:   22,
+			Direct8x8InferenceFlag:      true,
+			FrameCropping: &h264.SPS_FrameCropping{
+				LeftOffset:   4,
+				RightOffset:  6,
+				TopOffset:    2,
+				BottomOffset: 8,
+			},
+		},
+		1270,
+		716,
+		0,
+	},
+	{
+		// monochrome without frame cropping and without VUI.
+		"1280x720 monochrome no crop no vui",
+		[]byte{
+			0x67, 0x64, 0x00, 0x1f, 0xf3, 0xa0, 0x14, 0x01,
+			0x6e, 0x40,
+		},
+		h264.SPS{
+			ProfileIdc:                  100,
+			LevelIdc:                    31,
+			ChromaFormatIdc:             0,
+			Log2MaxPicOrderCntLsbMinus4: 0,
+			MaxNumRefFrames:             1,
+			PicWidthInMbsMinus1:         79,
+			PicHeightInMapUnitsMinus1:   44,
+			FrameMbsOnlyFlag:            true,
+			Direct8x8InferenceFlag:      true,
+		},
+		1280,
+		720,
+		0,
+	},
+	{
+		// 4:2:2 (ChromaFormatIdc=2): horizontal crop unit is 2,
+		// vertical crop unit is 1.
+		"1280x720 4:2:2 cropped",
+		[]byte{
+			0x67, 0x64, 0x00, 0x1f, 0xbc, 0xe8, 0x05, 0x00,
+			0x5b, 0xca, 0x76, 0x25,
+		},
+		h264.SPS{
+			ProfileIdc:                  100,
+			LevelIdc:                    31,
+			ChromaFormatIdc:             2,
+			Log2MaxPicOrderCntLsbMinus4: 0,
+			MaxNumRefFrames:             1,
+			PicWidthInMbsMinus1:         79,
+			PicHeightInMapUnitsMinus1:   44,
+			FrameMbsOnlyFlag:            true,
+			Direct8x8InferenceFlag:      true,
+			FrameCropping: &h264.SPS_FrameCropping{
+				LeftOffset:   4,
+				RightOffset:  6,
+				TopOffset:    2,
+				BottomOffset: 8,
+			},
+		},
+		1260,
+		710,
+		0,
+	},
+	{
+		// 4:4:4 (ChromaFormatIdc=3): crop units are 1x1 luma samples.
+		"1280x720 4:4:4 cropped",
+		[]byte{
+			0x67, 0x64, 0x00, 0x1f, 0x91, 0x9d, 0x00, 0xa0,
+			0x0b, 0x79, 0x4e, 0xc4, 0xa0,
+		},
+		h264.SPS{
+			ProfileIdc:                  100,
+			LevelIdc:                    31,
+			ChromaFormatIdc:             3,
+			Log2MaxPicOrderCntLsbMinus4: 0,
+			MaxNumRefFrames:             1,
+			PicWidthInMbsMinus1:         79,
+			PicHeightInMapUnitsMinus1:   44,
+			FrameMbsOnlyFlag:            true,
+			Direct8x8InferenceFlag:      true,
+			FrameCropping: &h264.SPS_FrameCropping{
+				LeftOffset:   4,
+				RightOffset:  6,
+				TopOffset:    2,
+				BottomOffset: 8,
+			},
+		},
+		1270,
+		710,
+		0,
+	},
+	{
+		// 4:4:4 with separate_colour_plane_flag: ChromaArrayType becomes
+		// 0, so crop units must be computed exactly like monochrome.
+		"1280x720 4:4:4 separate colour plane cropped",
+		[]byte{
+			0x67, 0x64, 0x00, 0x1f, 0x93, 0x9d, 0x00, 0xa0,
+			0x0b, 0x79, 0x4e, 0xc4, 0xa0,
+		},
+		h264.SPS{
+			ProfileIdc:                  100,
+			LevelIdc:                    31,
+			ChromaFormatIdc:             3,
+			SeparateColourPlaneFlag:     true,
+			Log2MaxPicOrderCntLsbMinus4: 0,
+			MaxNumRefFrames:             1,
+			PicWidthInMbsMinus1:         79,
+			PicHeightInMapUnitsMinus1:   44,
+			FrameMbsOnlyFlag:            true,
+			Direct8x8InferenceFlag:      true,
+			FrameCropping: &h264.SPS_FrameCropping{
+				LeftOffset:   4,
+				RightOffset:  6,
+				TopOffset:    2,
+				BottomOffset: 8,
+			},
+		},
+		1270,
+		710,
+		0,
+	},
 }
 
 func TestSPSUnmarshal(t *testing.T) {
@@ -574,4 +741,150 @@ func FuzzSPSUnmarshal(f *testing.F) {
 		sps.Height()
 		sps.FPS()
 	})
+}
+
+// a valid monochrome SPS with VUI timing info (25 fps), 1280x720, no cropping.
+var monochromeVUI = []byte{
+	0x67, 0x64, 0x00, 0x1f, 0xf2, 0xd0, 0x0a, 0x00,
+	0xb7, 0x42, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00,
+	0x00, 0x64, 0x08,
+}
+
+func TestSPSUnmarshalErrors(t *testing.T) {
+	// every prefix of a valid SPS shorter than the whole RBSP must fail:
+	// a truncated RBSP is never repaired or silently accepted.
+	// use a real-world SPS without trailing padding ambiguity.
+	var valid []byte
+	for _, ca := range casesSPS {
+		if ca.name == "1366x766 monochrome" {
+			valid = ca.byts
+			break
+		}
+	}
+	require.NotEmpty(t, valid)
+	for n := 1; n < len(valid); n++ {
+		var sps h264.SPS
+		err := sps.Unmarshal(append([]byte(nil), valid[:n]...))
+		require.Error(t, err)
+	}
+
+	// a valid SPS payload with the NALU type replaced by IDR (5).
+	notSPS := append([]byte(nil), casesSPS[0].byts...)
+	notSPS[0] = 0x65
+
+	errCases := []struct {
+		name string
+		byts []byte
+		err  string
+	}{
+		{
+			"empty",
+			[]byte{},
+			"not enough bits",
+		},
+		{
+			"nalu header only",
+			[]byte{0x67},
+			"not enough bits",
+		},
+		{
+			"not a SPS",
+			notSPS,
+			"not a SPS",
+		},
+		{
+			"invalid pic_order_cnt_type",
+			// baseline SPS whose pic_order_cnt_type is 3.
+			[]byte{0x67, 0x42, 0x00, 0x1f, 0xc9},
+			"invalid pic_order_cnt_type: 3",
+		},
+	}
+
+	for _, ca := range errCases {
+		t.Run(ca.name, func(t *testing.T) {
+			var sps h264.SPS
+			err := sps.Unmarshal(ca.byts)
+			require.EqualError(t, err, ca.err)
+		})
+	}
+}
+
+func TestSPSMonochromeParity(t *testing.T) {
+	// monochrome cropping must follow the same luma-sample rules as color:
+	// 4:4:4 and monochrome produce identical dimensions on identical crops.
+	mono := func() *h264.SPS {
+		var s h264.SPS
+		err := s.Unmarshal([]byte{
+			0x67, 0x64, 0x00, 0x1f, 0xf3, 0xa0, 0x14, 0x01,
+			0x6f, 0x29, 0xd8, 0x94,
+		})
+		require.NoError(t, err)
+		return &s
+	}()
+	colored := func() *h264.SPS {
+		var s h264.SPS
+		err := s.Unmarshal([]byte{
+			0x67, 0x64, 0x00, 0x1f, 0x91, 0x9d, 0x00, 0xa0,
+			0x0b, 0x79, 0x4e, 0xc4, 0xa0,
+		})
+		require.NoError(t, err)
+		return &s
+	}()
+
+	require.Equal(t, colored.Width(), mono.Width())
+	require.Equal(t, colored.Height(), mono.Height())
+
+	// repeated queries on the same SPS are stable and do not re-parse.
+	var timed h264.SPS
+	err := timed.Unmarshal(monochromeVUI)
+	require.NoError(t, err)
+
+	for range 5 {
+		require.Equal(t, 1280, timed.Width())
+		require.Equal(t, 720, timed.Height())
+		require.Equal(t, 25.0, timed.FPS())
+	}
+
+	// parsing another SPS into a different value must not leak state.
+	var other h264.SPS
+	err = other.Unmarshal(casesSPS[1].byts)
+	require.NoError(t, err)
+	require.Equal(t, 1280, other.Width())
+	require.Equal(t, 720, other.Height())
+	require.Equal(t, 30.0, other.FPS())
+	require.Equal(t, 1280, timed.Width())
+	require.Equal(t, 720, timed.Height())
+	require.Equal(t, 25.0, timed.FPS())
+}
+
+func BenchmarkSPSWidthHeight(b *testing.B) {
+	var sps h264.SPS
+	err := sps.Unmarshal(monochromeVUI)
+	require.NoError(b, err)
+
+	for b.Loop() {
+		// Width/Height/FPS are pure accessors over fields filled once by
+		// Unmarshal: querying them must not parse the bitstream again.
+		if sps.Width() != 1280 || sps.Height() != 720 || sps.FPS() != 25.0 {
+			b.Fatal("unexpected result")
+		}
+	}
+}
+
+func TestSPSManyLinear(t *testing.T) {
+	// parsing thousands of SPS must stay linear and every query must be
+	// answered from already-parsed fields, without touching the bitstream.
+	const count = 6000
+
+	parsed := make([]h264.SPS, count)
+	for i := range count {
+		err := parsed[i].Unmarshal(monochromeVUI)
+		require.NoError(t, err)
+	}
+
+	for i := range count {
+		require.Equal(t, 1280, parsed[i].Width())
+		require.Equal(t, 720, parsed[i].Height())
+		require.Equal(t, 25.0, parsed[i].FPS())
+	}
 }

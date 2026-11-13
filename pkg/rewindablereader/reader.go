@@ -24,6 +24,14 @@ func (r *Reader) Read(p []byte) (int, error) {
 	if !r.rewinded {
 		n, err := r.R.Read(p)
 
+		// An empty read must not alter the recorded content, the recorded size
+		// or the boundaries of subsequent data. Returning here also keeps the
+		// recording work proportional to the amount of actual data, regardless
+		// of how many empty reads are performed.
+		if n == 0 {
+			return 0, err
+		}
+
 		if (r.size + n) > maxRecordedSize {
 			return 0, errors.New("max recorded size exceeded")
 		}

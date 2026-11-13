@@ -167,6 +167,116 @@ var casesSequenceHeader = []struct {
 		1920,
 		1082,
 	},
+	{
+		"libaom initial display delay",
+		[]byte{
+			0x0a, 0x14, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00,
+			0x00, 0x00, 0x7b, 0x40, 0x00, 0x05, 0xbd, 0x4c,
+			0xff, 0xb3, 0xcc, 0xaf, 0x90, 0x04,
+		},
+		SequenceHeader{
+			TimingInfo: &SequenceHeader_TimingInfo{
+				NumUnitsInDisplayTick: 1,
+				TimeScale:             30,
+				EqualPictureInterval:  true,
+			},
+			InitialDisplayDelayPresentFlag: true,
+			OperatingPointIdc:              []uint16{0},
+			SeqLevelIdx:                    []uint8{5},
+			SeqTier:                        []bool{false},
+			DecoderModelPresentForThisOp:   []bool{false},
+			InitialDisplayPresentForThisOp: []bool{true},
+			InitialDisplayDelayMinus1:      []uint8{7},
+			MaxFrameWidthMinus1:            1279,
+			MaxFrameHeightMinus1:           719,
+			EnableFilterIntra:              true,
+			EnableIntraEdgeFilter:          true,
+			EnableWarpedMotion:             true,
+			EnableOrderHint:                true,
+			EnableRefFrameMvs:              true,
+			SeqChooseScreenContentTools:    true,
+			SeqForceScreenContentTools:     2,
+			SeqChooseIntegerMv:             true,
+			SeqForceIntegerMv:              2,
+			OrderHintBitsMinus1:            6,
+			EnableCdef:                     true,
+			ColorConfig: SequenceHeader_ColorConfig{
+				BitDepth:                8,
+				ColorPrimaries:          2,
+				TransferCharacteristics: 2,
+				MatrixCoefficients:      2,
+				SubsamplingX:            true,
+				SubsamplingY:            true,
+			},
+		},
+		1280,
+		720,
+	},
+	{
+		"multiple operating points with initial display delay",
+		[]byte{
+			0x0a, 0x0d, 0x02, 0x10, 0x00, 0x2d, 0xc0, 0x01,
+			0x03, 0xbf, 0xff, 0xf8, 0x03, 0x40, 0x20,
+		},
+		SequenceHeader{
+			InitialDisplayDelayPresentFlag: true,
+			OperatingPointsCntMinus1:       1,
+			OperatingPointIdc:              []uint16{0, 0},
+			SeqLevelIdx:                    []uint8{5, 8},
+			SeqTier:                        []bool{false, false},
+			DecoderModelPresentForThisOp:   []bool{false, false},
+			InitialDisplayPresentForThisOp: []bool{true, false},
+			InitialDisplayDelayMinus1:      []uint8{7, 0},
+			MaxFrameWidthMinus1:            255,
+			MaxFrameHeightMinus1:           255,
+			SeqChooseScreenContentTools:    true,
+			SeqForceScreenContentTools:     2,
+			SeqChooseIntegerMv:             true,
+			SeqForceIntegerMv:              2,
+			EnableCdef:                     true,
+			ColorConfig: SequenceHeader_ColorConfig{
+				BitDepth:                8,
+				ColorPrimaries:          2,
+				TransferCharacteristics: 2,
+				MatrixCoefficients:      2,
+				SubsamplingX:            true,
+				SubsamplingY:            true,
+			},
+		},
+		256,
+		256,
+	},
+	{
+		"reduced still picture",
+		[]byte{
+			0x0a, 0x06, 0x1a, 0x1d, 0xff, 0xff, 0xc2, 0x01,
+		},
+		SequenceHeader{
+			StillPicture:                   true,
+			ReducedStillPictureHeader:      true,
+			OperatingPointIdc:              []uint16{0},
+			SeqLevelIdx:                    []uint8{8},
+			SeqTier:                        []bool{false},
+			DecoderModelPresentForThisOp:   []bool{false},
+			InitialDisplayPresentForThisOp: []bool{false},
+			InitialDisplayDelayMinus1:      []uint8{0},
+			MaxFrameWidthMinus1:            255,
+			MaxFrameHeightMinus1:           255,
+			SeqForceScreenContentTools:     2,
+			SeqForceIntegerMv:              2,
+			EnableCdef:                     true,
+			ColorConfig: SequenceHeader_ColorConfig{
+				BitDepth:                8,
+				ColorPrimaries:          2,
+				TransferCharacteristics: 2,
+				MatrixCoefficients:      2,
+				SubsamplingX:            true,
+				SubsamplingY:            true,
+			},
+		},
+		256,
+		256,
+	},
 }
 
 func TestSequenceHeaderUnmarshal(t *testing.T) {
@@ -180,6 +290,79 @@ func TestSequenceHeaderUnmarshal(t *testing.T) {
 			require.Equal(t, ca.height, sh.Height())
 		})
 	}
+}
+
+func TestSequenceHeaderUnmarshalTruncated(t *testing.T) {
+	for _, ca := range casesSequenceHeader {
+		t.Run(ca.name, func(t *testing.T) {
+			if ca.byts[0]&0x02 != 0 {
+				// size-bearing OBU: every proper prefix must return an error,
+				// not silently decoded default values.
+				for i := 0; i < len(ca.byts); i++ {
+					var sh SequenceHeader
+					err := sh.Unmarshal(ca.byts[:i])
+					require.Error(t, err, "prefix length %d", i)
+				}
+			} else {
+				// OBU without size field: truncating into the middle of
+				// fields must return an error (the last bytes may contain
+				// padding only, in which case parsing legitimately succeeds).
+				for i := 0; i < len(ca.byts)/2; i++ {
+					var sh SequenceHeader
+					err := sh.Unmarshal(ca.byts[:i])
+					require.Error(t, err, "prefix length %d", i)
+				}
+			}
+		})
+	}
+}
+
+func TestSequenceHeaderUnmarshalReuse(t *testing.T) {
+	var sh SequenceHeader
+
+	// parse a sample with initial display delay
+	err := sh.Unmarshal(casesSequenceHeader[4].byts)
+	require.NoError(t, err)
+	require.Equal(t, casesSequenceHeader[4].sh, sh)
+
+	// a failed parse must not leave state behind
+	var sh2 SequenceHeader
+	for i := 0; i < len(casesSequenceHeader[4].byts); i++ {
+		err = sh2.Unmarshal(casesSequenceHeader[4].byts[:i])
+		require.Error(t, err)
+	}
+
+	// parsing valid data again on the same object must give a clean result
+	err = sh.Unmarshal(casesSequenceHeader[4].byts)
+	require.NoError(t, err)
+	require.Equal(t, casesSequenceHeader[4].sh, sh)
+
+	// parsing a different sample must not keep previous values
+	err = sh.Unmarshal(casesSequenceHeader[0].byts)
+	require.NoError(t, err)
+	require.Equal(t, casesSequenceHeader[0].sh, sh)
+
+	// parsing a reduced still picture header must reset per-operating-point arrays
+	err = sh.Unmarshal(casesSequenceHeader[6].byts)
+	require.NoError(t, err)
+	require.Equal(t, casesSequenceHeader[6].sh, sh)
+	require.Equal(t, []uint8{0}, sh.InitialDisplayDelayMinus1)
+	require.Nil(t, sh.TimingInfo)
+}
+
+func TestSequenceHeaderUnmarshalLarge(t *testing.T) {
+	// a 6000-byte sequence header must be parsed in a single pass
+	byts := make([]byte, 6000)
+	byts[0] = 0x0a
+	size := uint32(6000 - 3)
+	byts[1] = 0x80 | byte(size&0x7F)
+	byts[2] = byte(size >> 7)
+	copy(byts[3:], casesSequenceHeader[4].byts[2:])
+
+	var sh SequenceHeader
+	err := sh.Unmarshal(byts)
+	require.NoError(t, err)
+	require.Equal(t, casesSequenceHeader[4].sh, sh)
 }
 
 func FuzzSequenceHeaderUnmarshal(f *testing.F) {

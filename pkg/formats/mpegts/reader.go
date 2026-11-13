@@ -428,14 +428,22 @@ func (r *Reader) OnDataMPEG4AudioLATM(track *Track, cb ReaderOnDataMPEG4AudioLAT
 			return nil
 		}
 
-		var s mpeg4audio.AudioSyncStream
-		err := s.Unmarshal(data)
+		// A PES may start with a truncated LATM frame. The parser resynchronizes
+		// on the first valid syncword, so a partially corrupted PES still yields
+		// the usable audio mux elements. A fully unparseable PES is reported as a
+		// non-fatal decode error instead of being forwarded as empty data.
+		elements, _, err := parseLATMAudioSyncStream(data)
 		if err != nil {
 			r.onDecodeError(err)
 			return nil
 		}
 
-		return cb(pts, s.AudioMuxElements)
+		if len(elements) == 0 {
+			r.onDecodeError(fmt.Errorf("LATM PES payload contains no audio mux element"))
+			return nil
+		}
+
+		return cb(pts, elements)
 	}
 }
 

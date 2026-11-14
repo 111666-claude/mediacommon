@@ -102,8 +102,8 @@ func NewDTSExtractor() *DTSExtractor {
 func (d *DTSExtractor) extractInner(au [][]byte, pts int64) (int64, bool, error) {
 	var idr []byte
 	var nonIDR []byte
+	var seis [][]byte
 
-outer:
 	for _, nalu := range au {
 		typ := NALUType(nalu[0] & 0x1F)
 
@@ -130,12 +130,17 @@ outer:
 			}
 
 		case NALUTypeIDR:
-			idr = nalu
-			break outer
+			if idr == nil {
+				idr = nalu
+			}
 
 		case NALUTypeNonIDR:
-			nonIDR = nalu
-			break outer
+			if nonIDR == nil {
+				nonIDR = nalu
+			}
+
+		case NALUTypeSEI:
+			seis = append(seis, nalu)
 		}
 	}
 
@@ -151,8 +156,21 @@ outer:
 		return 0, false, fmt.Errorf("pic_order_cnt_type = 1 is not supported yet")
 	}
 
+	// an SEI is only relevant while waiting for a random access point:
+	// afterwards recovery points cannot change the state.
+	recoveryPoint := false
 	if !d.randomReceived {
-		if idr == nil {
+		for _, sei := range seis {
+			ok, err := hasRecoveryPointSEI(sei)
+			if err != nil {
+				return 0, false, err
+			}
+			recoveryPoint = recoveryPoint || ok
+		}
+	}
+
+	if !d.randomReceived {
+		if idr == nil && (!recoveryPoint || nonIDR == nil) {
 			return 0, false, fmt.Errorf("random access frame not received yet")
 		}
 		d.randomReceived = true
@@ -184,6 +202,18 @@ outer:
 		poc, err := getPictureOrderCount(nonIDR, d.spsp, false)
 		if err != nil {
 			return 0, false, err
+		}
+
+		// the first picture of a recovery point is a random access point:
+		// initialize the POC state exactly as if the picture were an IDR,
+		// so that following pictures are delivered in the same order.
+		if recoveryPoint && d.auCount == 0 {
+			d.expectedPOC = poc
+			d.auCount = 1
+			d.prevPrevPOC = 0
+			d.prevPOC = poc
+			ptsDTSDiff = 0
+			break
 		}
 
 		if d.auCount < 5 && d.pocIncrement == 2 {

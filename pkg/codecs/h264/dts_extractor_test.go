@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/bluenviron/mediacommon/v2/pkg/bits"
 )
 
 type sample struct {
@@ -13,6 +15,27 @@ type sample struct {
 	dts int64
 	pts int64
 }
+
+// makeNonIDRSlice builds a minimal non-IDR slice NALU whose
+// pic_order_cnt_lsb is set to poc (POC type 0, increment 2).
+func makeNonIDRSlice(poc uint32) []byte {
+	buf := make([]byte, 8)
+	pos := 0
+	bits.WriteBitsUnsafe(buf, &pos, 1, 1)           // first_mb_in_slice = 0
+	bits.WriteBitsUnsafe(buf, &pos, 1, 1)           // slice_type = 0 (P)
+	bits.WriteBitsUnsafe(buf, &pos, 1, 1)           // pic_parameter_set_id = 0
+	bits.WriteBitsUnsafe(buf, &pos, 0, 6)           // frame_num = 0
+	bits.WriteBitsUnsafe(buf, &pos, uint64(poc), 6) // pic_order_cnt_lsb
+	return append([]byte{0x41}, buf...)
+}
+
+// recovery point SEI: payloadType=6, payloadSize=2, recovery_frame_cnt=0,
+// exact_match_flag=1, broken_link_flag=0, changing_slice_group_idc=0,
+// followed by the RBSP stop and alignment bits.
+var recoveryPointSEI = []byte{0x06, 0x06, 0x02, 0x00, 0x83, 0x80}
+
+// ordinary SEI (user data, payloadType=5) without a recovery point.
+var ordinarySEI = []byte{0x06, 0x05, 0x04, 0xAA, 0xBB, 0xCC, 0x80}
 
 var casesDTSExtractor = []struct {
 	name     string
@@ -79,6 +102,65 @@ var casesDTSExtractor = []struct {
 				},
 				56890 + 18067,
 				56890 + 24000,
+			},
+		},
+	},
+	{
+		"recovery point SEI",
+		[]sample{
+			{
+				[][]byte{
+					{ // SPS
+						0x67, 0x64, 0x00, 0x28, 0xac, 0xd9, 0x40, 0x78,
+						0x02, 0x27, 0xe5, 0x84, 0x00, 0x00, 0x03, 0x00,
+						0x04, 0x00, 0x00, 0x03, 0x00, 0xf0, 0x3c, 0x60,
+						0xc6, 0x58,
+					},
+					recoveryPointSEI,
+					makeNonIDRSlice(0), // first picture is not an IDR
+				},
+				56890,
+				56890,
+			},
+			{
+				[][]byte{makeNonIDRSlice(2)},
+				56980,
+				59890,
+			},
+			{
+				[][]byte{makeNonIDRSlice(4)},
+				57070,
+				62890,
+			},
+			{
+				[][]byte{makeNonIDRSlice(6)},
+				65890,
+				65890,
+			},
+			{
+				[][]byte{makeNonIDRSlice(12)},
+				70390,
+				74890,
+			},
+			{
+				[][]byte{makeNonIDRSlice(10)},
+				70480,
+				71890,
+			},
+			{
+				[][]byte{makeNonIDRSlice(8)},
+				70570,
+				68890,
+			},
+			{
+				[][]byte{makeNonIDRSlice(16)},
+				75730,
+				80890,
+			},
+			{
+				[][]byte{makeNonIDRSlice(18)},
+				83890,
+				83890,
 			},
 		},
 	},
@@ -549,6 +631,136 @@ func TestDTSExtractor(t *testing.T) {
 				require.Equal(t, sample.dts, dts)
 			}
 		})
+	}
+}
+
+var recoverySPS = []byte{
+	0x67, 0x64, 0x00, 0x28, 0xac, 0xd9, 0x40, 0x78,
+	0x02, 0x27, 0xe5, 0x84, 0x00, 0x00, 0x03, 0x00,
+	0x04, 0x00, 0x00, 0x03, 0x00, 0xf0, 0x3c, 0x60,
+	0xc6, 0x58,
+}
+
+func TestDTSExtractorRecoveryPointErrors(t *testing.T) {
+	t.Run("valid recovery point allows non-IDR start", func(t *testing.T) {
+		ex := NewDTSExtractor()
+		dts, err := ex.Extract([][]byte{
+			recoverySPS,
+			recoveryPointSEI,
+			makeNonIDRSlice(0),
+		}, 56890)
+		require.NoError(t, err)
+		require.Equal(t, int64(56890), dts)
+	})
+
+	t.Run("ordinary SEI is not a random access point", func(t *testing.T) {
+		ex := NewDTSExtractor()
+		_, err := ex.Extract([][]byte{
+			recoverySPS,
+			ordinarySEI,
+			makeNonIDRSlice(0),
+		}, 56890)
+		require.EqualError(t, err, "random access frame not received yet")
+	})
+
+	t.Run("recovery point without a slice is not a random access point", func(t *testing.T) {
+		ex := NewDTSExtractor()
+		_, err := ex.Extract([][]byte{
+			recoverySPS,
+			recoveryPointSEI,
+		}, 56890)
+		require.EqualError(t, err, "random access frame not received yet")
+	})
+
+	t.Run("SPS missing", func(t *testing.T) {
+		ex := NewDTSExtractor()
+		_, err := ex.Extract([][]byte{
+			recoveryPointSEI,
+			makeNonIDRSlice(0),
+		}, 56890)
+		require.EqualError(t, err, "SPS not received yet")
+	})
+
+	t.Run("corrupted SEI is reported instead of being accepted", func(t *testing.T) {
+		ex := NewDTSExtractor()
+		// payloadSize=10 but the payload does not follow
+		_, err := ex.Extract([][]byte{
+			recoverySPS,
+			{0x06, 0x06, 0x0A},
+			makeNonIDRSlice(0),
+		}, 56890)
+		require.EqualError(t, err, "invalid SEI: payload exceeds NAL unit size")
+	})
+
+	t.Run("IDR still works without any SEI", func(t *testing.T) {
+		ex := NewDTSExtractor()
+		dts, err := ex.Extract([][]byte{
+			recoverySPS,
+			{0x65, 0x88, 0x84, 0x00, 0x33, 0xff},
+		}, 56890)
+		require.NoError(t, err)
+		require.Equal(t, int64(56890), dts)
+	})
+
+	t.Run("recovery point after the first picture changes nothing", func(t *testing.T) {
+		ex := NewDTSExtractor()
+
+		// start on an IDR
+		_, err := ex.Extract([][]byte{
+			recoverySPS,
+			{0x65, 0x88, 0x84, 0x00, 0x33, 0xff},
+		}, 56890)
+		require.NoError(t, err)
+
+		// a later, corrupted SEI must not surface: random access already happened
+		dts, err := ex.Extract([][]byte{
+			{0x06, 0x06, 0x0A},
+			makeNonIDRSlice(2),
+		}, 59890)
+		require.NoError(t, err)
+		require.Equal(t, int64(56980), dts)
+	})
+}
+
+func TestDTSExtractorRecoveryPointReordering(t *testing.T) {
+	// the same POC/PTS pattern as "with timing info", but the stream starts
+	// on a recovery point instead of an IDR; B-frames reorder the delivery,
+	// so DTS must stay monotonic and match the IDR-based behavior.
+	sequence := []struct {
+		poc uint32
+		pts int64
+		dts int64
+	}{
+		{0, 56890, 56890},
+		{2, 59890, 56980},
+		{4, 62890, 57070},
+		{6, 65890, 65890},
+		{12, 74890, 70390},
+		{10, 71890, 70480},
+		{8, 68890, 70570},
+		{16, 80890, 75730},
+		{18, 83890, 83890},
+	}
+
+	ex := NewDTSExtractor()
+	var prevDTS int64
+
+	for i, samp := range sequence {
+		var au [][]byte
+		if i == 0 {
+			au = [][]byte{recoverySPS, recoveryPointSEI, makeNonIDRSlice(samp.poc)}
+		} else {
+			au = [][]byte{makeNonIDRSlice(samp.poc)}
+		}
+
+		dts, err := ex.Extract(au, samp.pts)
+		require.NoError(t, err)
+		require.Equal(t, samp.dts, dts)
+
+		if i > 0 {
+			require.GreaterOrEqual(t, dts, prevDTS)
+		}
+		prevDTS = dts
 	}
 }
 

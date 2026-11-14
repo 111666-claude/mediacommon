@@ -53,11 +53,17 @@ func h264FindParams(avcc *amp4.AVCDecoderConfiguration) ([]byte, []byte, error) 
 	if len(avcc.SequenceParameterSets) > 1 {
 		return nil, nil, fmt.Errorf("multiple H264 SPS are not supported")
 	}
+	if len(avcc.SequenceParameterSets[0].NALUnit) == 0 {
+		return nil, nil, fmt.Errorf("H264 SPS is empty")
+	}
 	if len(avcc.PictureParameterSets) == 0 {
 		return nil, nil, fmt.Errorf("H264 PPS not provided")
 	}
 	if len(avcc.PictureParameterSets) > 1 {
 		return nil, nil, fmt.Errorf("multiple H264 PPS are not supported")
+	}
+	if len(avcc.PictureParameterSets[0].NALUnit) == 0 {
+		return nil, nil, fmt.Errorf("H264 PPS is empty")
 	}
 
 	return avcc.SequenceParameterSets[0].NALUnit, avcc.PictureParameterSets[0].NALUnit, nil
@@ -69,34 +75,51 @@ func h265FindParams(params []amp4.HEVCNaluArray) ([]byte, []byte, []byte, error)
 	var pps []byte
 
 	for _, arr := range params {
+		var dst *[]byte
+		var name string
+
 		switch h265.NALUType(arr.NaluType) {
-		case h265.NALUType_VPS_NUT, h265.NALUType_SPS_NUT, h265.NALUType_PPS_NUT:
-			if arr.NumNalus != 1 {
-				return nil, nil, nil, fmt.Errorf("multiple H265 VPS/SPS/PPS are not supported")
-			}
+		case h265.NALUType_VPS_NUT:
+			dst = &vps
+			name = "VPS"
 
-			switch h265.NALUType(arr.NaluType) {
-			case h265.NALUType_VPS_NUT:
-				vps = arr.Nalus[0].NALUnit
+		case h265.NALUType_SPS_NUT:
+			dst = &sps
+			name = "SPS"
 
-			case h265.NALUType_SPS_NUT:
-				sps = arr.Nalus[0].NALUnit
+		case h265.NALUType_PPS_NUT:
+			dst = &pps
+			name = "PPS"
 
-			case h265.NALUType_PPS_NUT:
-				pps = arr.Nalus[0].NALUnit
-			}
+		default:
+			continue
 		}
+
+		if len(arr.Nalus) == 0 {
+			return nil, nil, nil, fmt.Errorf("H265 %s not provided", name)
+		}
+		if len(arr.Nalus) > 1 {
+			return nil, nil, nil, fmt.Errorf("multiple H265 %s are not supported", name)
+		}
+		if *dst != nil {
+			return nil, nil, nil, fmt.Errorf("multiple H265 %s are not supported", name)
+		}
+		if len(arr.Nalus[0].NALUnit) == 0 {
+			return nil, nil, nil, fmt.Errorf("H265 %s is empty", name)
+		}
+
+		*dst = arr.Nalus[0].NALUnit
 	}
 
-	if len(vps) == 0 {
+	if vps == nil {
 		return nil, nil, nil, fmt.Errorf("H265 VPS not provided")
 	}
 
-	if len(sps) == 0 {
+	if sps == nil {
 		return nil, nil, nil, fmt.Errorf("H265 SPS not provided")
 	}
 
-	if len(pps) == 0 {
+	if pps == nil {
 		return nil, nil, nil, fmt.Errorf("H265 PPS not provided")
 	}
 

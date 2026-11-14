@@ -24,14 +24,16 @@ func (r *Reader) Read(p []byte) (int, error) {
 	if !r.rewinded {
 		n, err := r.R.Read(p)
 
-		if (r.size + n) > maxRecordedSize {
-			return 0, errors.New("max recorded size exceeded")
-		}
+		if n > 0 {
+			if (r.size + n) > maxRecordedSize {
+				return 0, errors.New("max recorded size exceeded")
+			}
 
-		entry := make([]byte, n)
-		copy(entry, p[:n])
-		r.entries = append(r.entries, entry)
-		r.size += n
+			entry := make([]byte, n)
+			copy(entry, p[:n])
+			r.entries = append(r.entries, entry)
+			r.size += n
+		}
 		return n, err
 	}
 

@@ -11,7 +11,56 @@ import (
 
 const (
 	maxBytesToGetPOC = 12
+
+	// Rec. ITU-T H.265, 7.4.8: num_long_term_sps + num_long_term_pics <= 32
+	maxLongTermRefPics = 32
 )
+
+// unmarshalLongTermRefPicSet parses the long-term reference picture set of
+// a slice segment header (Rec. ITU-T H.265, 7.3.6.1). Only the number of
+// long-term entries is needed to compute the PTS/DTS difference, but the
+// whole syntax element is consumed so that the caller does not desynchronize
+// on streams containing long-term reference pictures.
+//
+// SPS-level long-term reference pictures are rejected by SPS.Unmarshal, so
+// num_long_term_ref_pic_sps is always zero here and num_long_term_sps is not
+// present in the bitstream.
+func unmarshalLongTermRefPicSet(buf []byte, pos *int, log2MaxPicOrderCntLsb uint32) (int, error) {
+	numLongTermPics, err := bits.ReadGolombUnsigned(buf, pos) // num_long_term_pics
+	if err != nil {
+		return 0, err
+	}
+
+	if numLongTermPics > maxLongTermRefPics {
+		return 0, fmt.Errorf("num_long_term_pics exceeds %d", maxLongTermRefPics)
+	}
+
+	for range numLongTermPics {
+		_, err = bits.ReadBits(buf, pos, int(log2MaxPicOrderCntLsb)) // poc_lsb_lt
+		if err != nil {
+			return 0, err
+		}
+
+		_, err = bits.ReadFlag(buf, pos) // used_by_curr_pic_lt_flag
+		if err != nil {
+			return 0, err
+		}
+
+		deltaPocMsbPresentFlag, err := bits.ReadFlag(buf, pos)
+		if err != nil {
+			return 0, err
+		}
+
+		if deltaPocMsbPresentFlag {
+			_, err = bits.ReadGolombUnsigned(buf, pos) // delta_poc_msb_cycle_lt
+			if err != nil {
+				return 0, err
+			}
+		}
+	}
+
+	return int(numLongTermPics), nil
+}
 
 func getPTSDTSDiff(buf []byte, sps *SPS, pps *PPS) (int, error) {
 	typ := NALUType((buf[0] >> 1) & 0b111111)
@@ -85,11 +134,7 @@ func getPTSDTSDiff(buf []byte, sps *SPS, pps *PPS) (int, error) {
 		if err != nil {
 			return 0, err
 		}
-	} else {
-		if len(sps.ShortTermRefPicSets) <= 1 {
-			return 0, nil
-		}
-
+	} else if len(sps.ShortTermRefPicSets) > 1 {
 		b := int(math.Ceil(math.Log2(float64(len(sps.ShortTermRefPicSets)))))
 		var tmp uint64
 		tmp, err = bits.ReadBits(buf, &pos, b)
@@ -103,6 +148,38 @@ func getPTSDTSDiff(buf []byte, sps *SPS, pps *PPS) (int, error) {
 		}
 
 		rps = sps.ShortTermRefPicSets[shortTermRefPicSetIdx]
+	} else {
+		// the SPS contains at most one RPS and its index is not signaled;
+		// use it when available, otherwise treat the short-term RPS as empty.
+		if len(sps.ShortTermRefPicSets) == 1 {
+			rps = sps.ShortTermRefPicSets[0]
+		} else {
+			rps = &SPS_ShortTermRefPicSet{}
+		}
+	}
+
+	if sps.LongTermRefPicsPresentFlag {
+		// The long-term RPS follows the short-term one in the slice header.
+		// It must be consumed even when its entries are not used by the
+		// current picture, otherwise the remaining fields are read at the
+		// wrong position and later access units fail to parse.
+		numLongTermPics, err := unmarshalLongTermRefPicSet(
+			buf, &pos, sps.Log2MaxPicOrderCntLsbMinus4+4)
+		if err != nil {
+			return 0, err
+		}
+
+		// A P slice whose short-term RPS has no negative picture is valid
+		// only when it references a long-term picture. In that case it is
+		// decoded in output order, like a non-reordered frame.
+		if sliceType != 0 && len(rps.DeltaPocS0) == 0 {
+			if numLongTermPics == 0 {
+				return 0, fmt.Errorf("invalid DeltaPocS0")
+			}
+			return 0, nil
+		}
+	} else if sliceType != 0 && len(rps.DeltaPocS0) == 0 {
+		return 0, fmt.Errorf("invalid DeltaPocS0")
 	}
 
 	if sliceType == 0 { // B-frame
@@ -112,19 +189,17 @@ func getPTSDTSDiff(buf []byte, sps *SPS, pps *PPS) (int, error) {
 
 		case NALUType_TRAIL_R, NALUType_TSA_R, NALUType_STSA_R, NALUType_RASL_R:
 			if len(rps.DeltaPocS0) == 0 {
-				return 0, fmt.Errorf("invalid DeltaPocS0")
+				return -len(rps.DeltaPocS1), nil
 			}
 			return int(-rps.DeltaPocS0[0]-1) - len(rps.DeltaPocS1), nil
 
 		default:
 			return 0, nil
 		}
-	} else { // I or P-frame
-		if len(rps.DeltaPocS0) == 0 {
-			return 0, fmt.Errorf("invalid DeltaPocS0")
-		}
-		return int(-rps.DeltaPocS0[0] - 1), nil
 	}
+
+	// I or P-frame
+	return int(-rps.DeltaPocS0[0] - 1), nil
 }
 
 // DTSExtractor computes DTS from PTS.

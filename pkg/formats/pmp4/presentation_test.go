@@ -2,8 +2,10 @@ package pmp4
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -2731,6 +2733,254 @@ func TestPresentationMarshal(t *testing.T) {
 			require.Equal(t, ca.enc, buf.Bytes())
 		})
 	}
+}
+
+var testH264Codec = &codecs.H264{
+	SPS: []byte{ // 1920x1080 baseline
+		0x67, 0x42, 0xc0, 0x28, 0xd9, 0x00, 0x78, 0x02,
+		0x27, 0xe5, 0x84, 0x00, 0x00, 0x03, 0x00, 0x04,
+		0x00, 0x00, 0x03, 0x00, 0xf0, 0x3c, 0x60, 0xc9, 0x20,
+	},
+	PPS: []byte{0x08, 0x06, 0x07, 0x08},
+}
+
+// returns version and duration of the first mdhd box in buf.
+func mdhdVersionAndDuration(t *testing.T, buf []byte) (byte, uint64) {
+	t.Helper()
+
+	i := bytes.Index(buf, []byte("mdhd"))
+	require.NotEqual(t, -1, i)
+
+	version := buf[i+4]
+	if version == 0 {
+		return version, uint64(binary.BigEndian.Uint32(buf[i+20:]))
+	}
+
+	require.Equal(t, byte(1), version)
+	return version, binary.BigEndian.Uint64(buf[i+28:])
+}
+
+func TestPresentationLongDurationRoundTrip(t *testing.T) {
+	// two samples of 25200 seconds each at 90 kHz:
+	// the media duration exceeds 2^32 ticks.
+	p := Presentation{
+		Tracks: []*Track{
+			{
+				ID:         1,
+				TimeScale:  90000,
+				TimeOffset: 90000,
+				Codec:      testH264Codec,
+				Samples: []*Sample{
+					{
+						Duration:    2268000000,
+						PayloadSize: 2,
+						GetPayload: func() ([]byte, error) {
+							return []byte{1, 2}, nil
+						},
+					},
+					{
+						Duration:    2268000000,
+						PayloadSize: 2,
+						GetPayload: func() ([]byte, error) {
+							return []byte{3, 4}, nil
+						},
+					},
+				},
+			},
+			{
+				ID:         2,
+				TimeScale:  48000,
+				TimeOffset: -48000,
+				Codec: &codecs.Opus{
+					ChannelCount: 2,
+				},
+				Samples: []*Sample{{
+					Duration:    96000,
+					PayloadSize: 2,
+					GetPayload: func() ([]byte, error) {
+						return []byte{5, 6}, nil
+					},
+				}},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	err := p.Marshal(&buf)
+	require.NoError(t, err)
+
+	// the long track must use a version 1 mdhd, able to hold the full duration
+	version, duration := mdhdVersionAndDuration(t, buf.Bytes())
+	require.Equal(t, byte(1), version)
+	require.Equal(t, uint64(2*2268000000+90000), duration)
+
+	var p2 Presentation
+	err = p2.Unmarshal(bytes.NewReader(buf.Bytes()))
+	require.NoError(t, err)
+
+	require.Equal(t, int32(90000), p2.Tracks[0].TimeOffset)
+	require.Equal(t, uint32(2268000000), p2.Tracks[0].Samples[0].Duration)
+	require.Equal(t, uint32(2268000000), p2.Tracks[0].Samples[1].Duration)
+
+	// the other track must not be affected
+	require.Equal(t, int32(-48000), p2.Tracks[1].TimeOffset)
+	require.Equal(t, uint32(96000), p2.Tracks[1].Samples[0].Duration)
+}
+
+func TestPresentationDurationBoundary(t *testing.T) {
+	for _, ca := range []struct {
+		name            string
+		durations       []uint32
+		expectedVersion byte
+	}{
+		{"uint32 max", []uint32{math.MaxUint32}, 0},
+		{"uint32 max plus one", []uint32{math.MaxUint32, 1}, 1},
+	} {
+		t.Run(ca.name, func(t *testing.T) {
+			var samples []*Sample
+			for _, d := range ca.durations {
+				d := d
+				samples = append(samples, &Sample{
+					Duration:    d,
+					PayloadSize: 2,
+					GetPayload: func() ([]byte, error) {
+						return []byte{1, 2}, nil
+					},
+				})
+			}
+
+			p := Presentation{
+				Tracks: []*Track{{
+					ID:        1,
+					TimeScale: 90000,
+					Codec:     testH264Codec,
+					Samples:   samples,
+				}},
+			}
+
+			var buf bytes.Buffer
+			err := p.Marshal(&buf)
+			require.NoError(t, err)
+
+			expectedDuration := uint64(0)
+			for _, d := range ca.durations {
+				expectedDuration += uint64(d)
+			}
+
+			version, duration := mdhdVersionAndDuration(t, buf.Bytes())
+			require.Equal(t, ca.expectedVersion, version)
+			require.Equal(t, expectedDuration, duration)
+
+			var p2 Presentation
+			err = p2.Unmarshal(bytes.NewReader(buf.Bytes()))
+			require.NoError(t, err)
+
+			require.Equal(t, int32(0), p2.Tracks[0].TimeOffset)
+			for i, d := range ca.durations {
+				require.Equal(t, d, p2.Tracks[0].Samples[i].Duration)
+			}
+		})
+	}
+}
+
+func TestPresentationUnmarshalTimeOffsetOverflow(t *testing.T) {
+	p := Presentation{
+		Tracks: []*Track{{
+			ID:        1,
+			TimeScale: 90000,
+			Codec:     testH264Codec,
+			Samples: []*Sample{{
+				Duration:    90000,
+				PayloadSize: 2,
+				GetPayload: func() ([]byte, error) {
+					return []byte{1, 2}, nil
+				},
+			}},
+		}},
+	}
+
+	var buf bytes.Buffer
+	err := p.Marshal(&buf)
+	require.NoError(t, err)
+
+	enc := buf.Bytes()
+
+	// replace the 32-byte version 0 mdhd with a 44-byte version 1 mdhd
+	// whose duration makes the time offset exceed 32 bits
+	i := bytes.Index(enc, []byte("mdhd"))
+	require.NotEqual(t, -1, i)
+	require.Equal(t, uint32(32), binary.BigEndian.Uint32(enc[i-4:]))
+
+	hugeDuration := uint64(90000) + uint64(math.MaxInt32) + 1
+
+	mdhdV1 := make([]byte, 0, 44)
+	mdhdV1 = binary.BigEndian.AppendUint32(mdhdV1, 44)
+	mdhdV1 = append(mdhdV1, "mdhd"...)
+	mdhdV1 = append(mdhdV1, 0x01, 0x00, 0x00, 0x00)              // version + flags
+	mdhdV1 = binary.BigEndian.AppendUint64(mdhdV1, 0)            // creation time
+	mdhdV1 = binary.BigEndian.AppendUint64(mdhdV1, 0)            // modification time
+	mdhdV1 = binary.BigEndian.AppendUint32(mdhdV1, 90000)        // timescale
+	mdhdV1 = binary.BigEndian.AppendUint64(mdhdV1, hugeDuration) // duration
+	mdhdV1 = append(mdhdV1, 0x55, 0xc4, 0x00, 0x00)              // language + pre-defined
+
+	enc = append(enc[:i-4:i-4], append(mdhdV1, enc[i+28:]...)...)
+
+	// enlarge ancestor boxes
+	for _, typ := range []string{"mdia", "trak", "moov"} {
+		j := bytes.Index(enc, []byte(typ))
+		require.NotEqual(t, -1, j)
+		binary.BigEndian.PutUint32(enc[j-4:], binary.BigEndian.Uint32(enc[j-4:])+12)
+	}
+
+	// shift chunk offsets
+	j := bytes.Index(enc, []byte("stco"))
+	require.NotEqual(t, -1, j)
+	entryCount := binary.BigEndian.Uint32(enc[j+8:])
+	for k := uint32(0); k < entryCount; k++ {
+		off := j + 12 + 4*int(k)
+		binary.BigEndian.PutUint32(enc[off:], binary.BigEndian.Uint32(enc[off:])+12)
+	}
+
+	var p2 Presentation
+	err = p2.Unmarshal(bytes.NewReader(enc))
+	require.ErrorContains(t, err, "does not fit into 32 bits")
+}
+
+func TestPresentationMarshalInvalidDurations(t *testing.T) {
+	newPresentation := func() Presentation {
+		return Presentation{
+			Tracks: []*Track{{
+				ID:        1,
+				TimeScale: 90000,
+				Codec:     testH264Codec,
+				Samples: []*Sample{{
+					Duration:    90000,
+					PayloadSize: 2,
+					GetPayload: func() ([]byte, error) {
+						return []byte{1, 2}, nil
+					},
+				}},
+			}},
+		}
+	}
+
+	t.Run("zero timescale", func(t *testing.T) {
+		p := newPresentation()
+		p.Tracks[0].TimeScale = 0
+
+		var buf bytes.Buffer
+		err := p.Marshal(&buf)
+		require.ErrorContains(t, err, "invalid timescale")
+	})
+
+	t.Run("negative media duration", func(t *testing.T) {
+		p := newPresentation()
+		p.Tracks[0].TimeOffset = -180000
+
+		var buf bytes.Buffer
+		err := p.Marshal(&buf)
+		require.ErrorContains(t, err, "invalid track duration")
+	})
 }
 
 func FuzzPresentationUnmarshal(f *testing.F) {

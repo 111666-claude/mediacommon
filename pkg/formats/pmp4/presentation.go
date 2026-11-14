@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"time"
 
 	amp4 "github.com/abema/go-mp4"
@@ -58,7 +59,7 @@ func (p *Presentation) Unmarshal(r io.ReadSeeker) error {
 	var state readState
 	var stszReceived bool
 	var stcoReceived bool
-	var trackDuration uint32
+	var trackDuration uint64
 	var curTrack *Track
 	var codecBoxesReader *imp4.CodecBoxesReader
 	var curChunks []*chunk
@@ -174,8 +175,12 @@ func (p *Presentation) Unmarshal(r io.ReadSeeker) error {
 				return nil, fmt.Errorf("invalid timescale")
 			}
 
+			trackDuration = mdhd.GetDuration()
+			if trackDuration > math.MaxInt64 {
+				return nil, fmt.Errorf("invalid duration: %d", trackDuration)
+			}
+
 			curTrack.TimeScale = mdhd.Timescale
-			trackDuration = mdhd.DurationV0
 			state = waitingStsd
 
 		case "minf", "stbl":
@@ -217,12 +222,17 @@ func (p *Presentation) Unmarshal(r io.ReadSeeker) error {
 				}
 			}
 
-			sampleDuration := uint32(0)
+			sampleDuration := uint64(0)
 			for _, sa := range curTrack.Samples {
-				sampleDuration += sa.Duration
+				sampleDuration += uint64(sa.Duration)
 			}
 
-			curTrack.TimeOffset = int32(trackDuration) - int32(sampleDuration)
+			timeOffset := int64(trackDuration) - int64(sampleDuration)
+			if timeOffset > math.MaxInt32 || timeOffset < math.MinInt32 {
+				return nil, fmt.Errorf("time offset %d does not fit into 32 bits", timeOffset)
+			}
+
+			curTrack.TimeOffset = int32(timeOffset)
 
 			state = waitingSampleProps
 
@@ -430,6 +440,12 @@ func (p Presentation) Marshal(w io.Writer) error {
 		|    |....|
 		|mdat|
 	*/
+
+	for _, track := range p.Tracks {
+		if track.TimeScale == 0 {
+			return fmt.Errorf("invalid timescale")
+		}
+	}
 
 	dataSize, sortedSamples := p.sortSamples()
 

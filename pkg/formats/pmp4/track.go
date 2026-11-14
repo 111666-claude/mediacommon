@@ -1,6 +1,9 @@
 package pmp4
 
 import (
+	"fmt"
+	"math"
+
 	amp4 "github.com/abema/go-mp4"
 
 	imp4 "github.com/bluenviron/mediacommon/v2/internal/mp4"
@@ -74,12 +77,29 @@ func (t Track) marshal(w *imp4.Writer) (*headerTrackMarshalResult, error) {
 		return nil, err
 	}
 
-	sampleDuration := uint32(0)
-	for _, sa := range t.Samples {
-		sampleDuration += sa.Duration
+	if t.TimeScale == 0 {
+		return nil, fmt.Errorf("invalid timescale")
 	}
 
-	presentationDuration := uint32(((int64(sampleDuration) + int64(t.TimeOffset)) * globalTimescale) / int64(t.TimeScale))
+	sampleDuration := uint64(0)
+	for _, sa := range t.Samples {
+		sampleDuration += uint64(sa.Duration)
+	}
+
+	if sampleDuration > uint64(math.MaxInt64/globalTimescale)-uint64(math.MaxInt32) {
+		return nil, fmt.Errorf("track duration is too large")
+	}
+
+	mediaDuration := int64(sampleDuration) + int64(t.TimeOffset)
+	if mediaDuration < 0 {
+		return nil, fmt.Errorf("invalid track duration: %d", mediaDuration)
+	}
+
+	presentationDuration64 := (mediaDuration * globalTimescale) / int64(t.TimeScale)
+	if presentationDuration64 > math.MaxUint32 {
+		return nil, fmt.Errorf("track presentation duration is too large: %d", presentationDuration64)
+	}
+	presentationDuration := uint32(presentationDuration64)
 
 	if t.Codec.IsVideo() {
 		_, err = w.WriteBox(&amp4.Tkhd{ // <tkhd/>
@@ -131,11 +151,18 @@ func (t Track) marshal(w *imp4.Writer) (*headerTrackMarshalResult, error) {
 		return nil, err
 	}
 
-	_, err = w.WriteBox(&amp4.Mdhd{ // <mdhd/>
-		Timescale:  t.TimeScale,
-		DurationV0: uint32(int64(sampleDuration) + int64(t.TimeOffset)),
-		Language:   [3]byte{'u', 'n', 'd'},
-	})
+	mdhd := &amp4.Mdhd{ // <mdhd/>
+		Timescale: t.TimeScale,
+		Language:  [3]byte{'u', 'n', 'd'},
+	}
+	if mediaDuration <= math.MaxUint32 {
+		mdhd.DurationV0 = uint32(mediaDuration)
+	} else {
+		mdhd.FullBox = amp4.FullBox{Version: 1}
+		mdhd.DurationV1 = uint64(mediaDuration)
+	}
+
+	_, err = w.WriteBox(mdhd)
 	if err != nil {
 		return nil, err
 	}
@@ -308,20 +335,47 @@ func (t Track) marshal(w *imp4.Writer) (*headerTrackMarshalResult, error) {
 	}, nil
 }
 
-func (t *Track) marshalELST(w *imp4.Writer, sampleDuration uint32) error {
+func (t *Track) marshalELST(w *imp4.Writer, sampleDuration uint64) error {
 	if t.TimeOffset > 0 {
+		pauseDuration := (uint64(t.TimeOffset) * globalTimescale) / uint64(t.TimeScale)
+		segmentDuration := (sampleDuration * globalTimescale) / uint64(t.TimeScale)
+
+		if pauseDuration <= math.MaxUint32 && segmentDuration <= math.MaxUint32 {
+			_, err := w.WriteBox(&amp4.Elst{
+				EntryCount: 2,
+				Entries: []amp4.ElstEntry{
+					{ // pause
+						SegmentDurationV0: uint32(pauseDuration),
+						MediaTimeV0:       -1,
+						MediaRateInteger:  1,
+						MediaRateFraction: 0,
+					},
+					{ // presentation
+						SegmentDurationV0: uint32(segmentDuration),
+						MediaTimeV0:       0,
+						MediaRateInteger:  1,
+						MediaRateFraction: 0,
+					},
+				},
+			})
+			return err
+		}
+
 		_, err := w.WriteBox(&amp4.Elst{
+			FullBox: amp4.FullBox{
+				Version: 1,
+			},
 			EntryCount: 2,
 			Entries: []amp4.ElstEntry{
 				{ // pause
-					SegmentDurationV0: uint32((uint64(t.TimeOffset) * globalTimescale) / uint64(t.TimeScale)),
-					MediaTimeV0:       -1,
+					SegmentDurationV1: pauseDuration,
+					MediaTimeV1:       -1,
 					MediaRateInteger:  1,
 					MediaRateFraction: 0,
 				},
 				{ // presentation
-					SegmentDurationV0: uint32((uint64(sampleDuration) * globalTimescale) / uint64(t.TimeScale)),
-					MediaTimeV0:       0,
+					SegmentDurationV1: segmentDuration,
+					MediaTimeV1:       0,
 					MediaRateInteger:  1,
 					MediaRateFraction: 0,
 				},
@@ -330,12 +384,30 @@ func (t *Track) marshalELST(w *imp4.Writer, sampleDuration uint32) error {
 		return err
 	}
 
+	mediaTime := -int64(t.TimeOffset)
+	segmentDuration := ((sampleDuration + uint64(mediaTime)) * globalTimescale) / uint64(t.TimeScale)
+
+	if segmentDuration <= math.MaxUint32 && mediaTime <= math.MaxInt32 {
+		_, err := w.WriteBox(&amp4.Elst{
+			EntryCount: 1,
+			Entries: []amp4.ElstEntry{{
+				SegmentDurationV0: uint32(segmentDuration),
+				MediaTimeV0:       int32(mediaTime),
+				MediaRateInteger:  1,
+				MediaRateFraction: 0,
+			}},
+		})
+		return err
+	}
+
 	_, err := w.WriteBox(&amp4.Elst{
+		FullBox: amp4.FullBox{
+			Version: 1,
+		},
 		EntryCount: 1,
 		Entries: []amp4.ElstEntry{{
-			SegmentDurationV0: uint32(((uint64(sampleDuration) +
-				uint64(-t.TimeOffset)) * globalTimescale) / uint64(t.TimeScale)),
-			MediaTimeV0:       -t.TimeOffset,
+			SegmentDurationV1: segmentDuration,
+			MediaTimeV1:       mediaTime,
 			MediaRateInteger:  1,
 			MediaRateFraction: 0,
 		}},

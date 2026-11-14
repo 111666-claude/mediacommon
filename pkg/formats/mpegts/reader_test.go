@@ -39,6 +39,45 @@ var testH264SPS = []byte{
 	0x20,
 }
 
+// testMPEG1AudioFrame is a MPEG-1 layer 3 frame (64 kbps, 44.1 kHz, padding on),
+// whose length is 209 bytes.
+var testMPEG1AudioFrame = []byte{
+	0xff, 0xfa, 0x52, 0x04, 0xa9, 0xbe, 0xe4, 0x8f,
+	0xf0, 0xfd, 0x02, 0xdc, 0x80, 0x00, 0x30, 0x00,
+	0x22, 0xc1, 0x5b, 0x90, 0x14, 0x23, 0x24, 0x05,
+	0x58, 0x3f, 0x72, 0x02, 0x84, 0xc4, 0xc0, 0xc5,
+	0x07, 0xae, 0x40, 0x21, 0xbc, 0x98, 0x90, 0xfa,
+	0x3a, 0x2d, 0xda, 0x07, 0xe1, 0x4d, 0xa9, 0x9a,
+	0xb8, 0xa2, 0x3b, 0x20, 0xc1, 0xc1, 0xba, 0x08,
+	0x94, 0x30, 0x8b, 0xc5, 0x69, 0x51, 0x95, 0xd5,
+	0xd7, 0x42, 0x91, 0x65, 0x09, 0xfb, 0x7e, 0x7e,
+	0xd9, 0xcf, 0x7f, 0x77, 0x45, 0x03, 0x8d, 0x5c,
+	0xcd, 0x52, 0x82, 0x19, 0xbc, 0x94, 0x8c, 0x78,
+	0x13, 0xe0, 0x94, 0xc2, 0x96, 0x62, 0x82, 0x20,
+	0xb9, 0xf1, 0x3a, 0x05, 0xfa, 0x94, 0x06, 0xbd,
+	0xf6, 0x67, 0xa3, 0xca, 0xa5, 0x3a, 0xd5, 0xb5,
+	0x34, 0xa9, 0xe8, 0x7e, 0x9f, 0x2f, 0x53, 0xde,
+	0x8b, 0xd6, 0x3c, 0x2f, 0x2d, 0xb4, 0x56, 0x0c,
+	0xc5, 0x3e, 0x7a, 0xa7, 0x81, 0x5c, 0x35, 0x60,
+	0xb3, 0x0c, 0x28, 0x2c, 0x08, 0x06, 0xc0, 0xe0,
+	0x3c, 0x0a, 0xfa, 0x1a, 0x6f, 0x43, 0x55, 0xbe,
+	0x05, 0x5a, 0x53, 0xae, 0xcb, 0x74, 0xa9, 0xe8,
+	0x7e, 0x9f, 0x2f, 0x53, 0xde, 0x8b, 0xd6, 0x20,
+	0x36, 0xce, 0xcb, 0xcd, 0x95, 0x15, 0x08, 0xaa,
+	0x82, 0x13, 0x51, 0x48, 0xc1, 0x09, 0x28, 0x46,
+	0x11, 0x0b, 0x3b, 0x41, 0x34, 0x50, 0x24, 0x18,
+	0xa7, 0x72, 0x88, 0x99, 0x49, 0x17, 0x63, 0xac,
+	0xa7, 0x98, 0x7e, 0x81, 0x7b, 0x13, 0x9d, 0x7f,
+	0xd3,
+}
+
+// testMPEG1AudioFrame168 is a MPEG-1 layer 3 frame (56 kbps, 48 kHz),
+// whose length is 168 bytes.
+var testMPEG1AudioFrame168 = append(
+	[]byte{0xff, 0xfa, 0x44, 0x00},
+	make([]byte, 164)...,
+)
+
 type sample struct {
 	pts  int64
 	dts  int64
@@ -621,35 +660,7 @@ var casesReadWriter = []struct {
 			{
 				30 * 90000,
 				30 * 90000,
-				[][]byte{{
-					0xff, 0xfa, 0x52, 0x04, 0xa9, 0xbe, 0xe4, 0x8f,
-					0xf0, 0xfd, 0x02, 0xdc, 0x80, 0x00, 0x30, 0x00,
-					0x22, 0xc1, 0x5b, 0x90, 0x14, 0x23, 0x24, 0x05,
-					0x58, 0x3f, 0x72, 0x02, 0x84, 0xc4, 0xc0, 0xc5,
-					0x07, 0xae, 0x40, 0x21, 0xbc, 0x98, 0x90, 0xfa,
-					0x3a, 0x2d, 0xda, 0x07, 0xe1, 0x4d, 0xa9, 0x9a,
-					0xb8, 0xa2, 0x3b, 0x20, 0xc1, 0xc1, 0xba, 0x08,
-					0x94, 0x30, 0x8b, 0xc5, 0x69, 0x51, 0x95, 0xd5,
-					0xd7, 0x42, 0x91, 0x65, 0x09, 0xfb, 0x7e, 0x7e,
-					0xd9, 0xcf, 0x7f, 0x77, 0x45, 0x03, 0x8d, 0x5c,
-					0xcd, 0x52, 0x82, 0x19, 0xbc, 0x94, 0x8c, 0x78,
-					0x13, 0xe0, 0x94, 0xc2, 0x96, 0x62, 0x82, 0x20,
-					0xb9, 0xf1, 0x3a, 0x05, 0xfa, 0x94, 0x06, 0xbd,
-					0xf6, 0x67, 0xa3, 0xca, 0xa5, 0x3a, 0xd5, 0xb5,
-					0x34, 0xa9, 0xe8, 0x7e, 0x9f, 0x2f, 0x53, 0xde,
-					0x8b, 0xd6, 0x3c, 0x2f, 0x2d, 0xb4, 0x56, 0x0c,
-					0xc5, 0x3e, 0x7a, 0xa7, 0x81, 0x5c, 0x35, 0x60,
-					0xb3, 0x0c, 0x28, 0x2c, 0x08, 0x06, 0xc0, 0xe0,
-					0x3c, 0x0a, 0xfa, 0x1a, 0x6f, 0x43, 0x55, 0xbe,
-					0x05, 0x5a, 0x53, 0xae, 0xcb, 0x74, 0xa9, 0xe8,
-					0x7e, 0x9f, 0x2f, 0x53, 0xde, 0x8b, 0xd6, 0x20,
-					0x36, 0xce, 0xcb, 0xcd, 0x95, 0x15, 0x08, 0xaa,
-					0x82, 0x13, 0x51, 0x48, 0xc1, 0x09, 0x28, 0x46,
-					0x11, 0x0b, 0x3b, 0x41, 0x34, 0x50, 0x24, 0x18,
-					0xa7, 0x72, 0x88, 0x99, 0x49, 0x17, 0x63, 0xac,
-					0xa7, 0x98, 0x7e, 0x81, 0x7b, 0x13, 0x9d, 0x7f,
-					0xd3,
-				}},
+				[][]byte{testMPEG1AudioFrame},
 			},
 		},
 		[]*astits.Packet{
@@ -1814,6 +1825,415 @@ func TestReaderDecodeErrors(t *testing.T) {
 	}
 }
 
+// newTestStreamMuxer creates a muxer that already contains PAT and PMT tables
+// for a single elementary stream.
+func newTestStreamMuxer(t *testing.T, es astits.PMTElementaryStream) (*astits.Muxer, *bytes.Buffer) {
+	t.Helper()
+
+	var buf bytes.Buffer
+	mux := astits.NewMuxer(context.Background(), &buf)
+
+	err := mux.AddElementaryStream(es)
+	require.NoError(t, err)
+
+	mux.SetPCRPID(es.ElementaryPID)
+
+	_, err = mux.WriteTables()
+	require.NoError(t, err)
+
+	return mux, &buf
+}
+
+// encodeTestPTS encodes a PTS in the 5-byte format defined by ISO 13818-1.
+func encodeTestPTS(v int64) []byte {
+	return []byte{
+		uint8(0b0010<<4 | ((v>>30)&0x7)<<1 | 1),
+		uint8(v >> 22),
+		uint8((((v >> 15) & 0x7f) << 1) | 1),
+		uint8(v >> 7),
+		uint8(((v & 0x7f) << 1) | 1),
+	}
+}
+
+// emptyPayloadPESPacket builds a TS packet that contains a PES packet whose
+// header is valid, but whose payload has zero length.
+// cc is the continuity counter of the packet.
+func emptyPayloadPESPacket(pid uint16, cc uint8, streamID uint8, pts int64) *astits.Packet {
+	payload := []byte{
+		0x00, 0x00, 0x01, streamID, 0x00, 0x08,
+		0x80, 0x80, 0x05,
+	}
+	payload = append(payload, encodeTestPTS(pts)...)
+
+	return &astits.Packet{
+		AdaptationField: &astits.PacketAdaptationField{
+			Length:                169,
+			StuffingLength:        162,
+			RandomAccessIndicator: true,
+			HasPCR:                true,
+			PCR:                   &astits.ClockReference{Base: pts - dtsPCRDiff},
+		},
+		Header: astits.PacketHeader{
+			ContinuityCounter:         cc,
+			HasAdaptationField:        true,
+			HasPayload:                true,
+			PayloadUnitStartIndicator: true,
+			PID:                       pid,
+		},
+		Payload: payload,
+	}
+}
+
+func readAll(t *testing.T, r *Reader) {
+	t.Helper()
+
+	for {
+		err := r.Read()
+		if errors.Is(err, io.EOF) {
+			return
+		}
+		require.NoError(t, err)
+	}
+}
+
+func TestReaderDVBSubtitleEmptyPayload(t *testing.T) {
+	mux, buf := newTestStreamMuxer(t, astits.PMTElementaryStream{
+		ElementaryPID: 123,
+		StreamType:    astits.StreamTypePrivateData,
+		ElementaryStreamDescriptors: []*astits.Descriptor{
+			{
+				Length: 1,
+				Tag:    astits.DescriptorTagSubtitling,
+				Subtitling: &astits.DescriptorSubtitling{
+					Items: []*astits.DescriptorSubtitlingItem{{
+						AncillaryPageID:   123,
+						CompositionPageID: 456,
+						Language:          []byte("eng"),
+						Type:              22,
+					}},
+				},
+			},
+		},
+	})
+
+	// DVB subtitle PES with a valid header and an empty payload.
+	_, err := mux.WritePacket(emptyPayloadPESPacket(123, 15, streamIDPrivate, 30*90000))
+	require.NoError(t, err)
+
+	// A valid PES after the invalid one, to check that the reader
+	// doesn't retain any state from the previous packet.
+	_, err = mux.WriteData(&astits.MuxerData{
+		PID: 123,
+		PES: &astits.PESData{
+			Header: &astits.PESHeader{
+				OptionalHeader: &astits.PESOptionalHeader{
+					MarkerBits:      2,
+					PTSDTSIndicator: astits.PTSDTSIndicatorOnlyPTS,
+					PTS:             &astits.ClockReference{Base: 60 * 90000},
+				},
+				StreamID: streamIDPrivate,
+			},
+			Data: []byte{1, 2, 3},
+		},
+	})
+	require.NoError(t, err)
+
+	r, err := NewReader(buf)
+	require.NoError(t, err)
+	require.Equal(t, &codecs.DVBSubtitle{
+		Items: []*astits.DescriptorSubtitlingItem{{
+			AncillaryPageID:   123,
+			CompositionPageID: 456,
+			Language:          []byte("eng"),
+			Type:              22,
+		}},
+	}, r.Tracks()[0].Codec)
+
+	var decErrs []string
+
+	r.OnDecodeError(func(err error) {
+		decErrs = append(decErrs, err.Error())
+	})
+
+	type dvbSample struct {
+		pts  int64
+		data []byte
+	}
+	var samples []dvbSample
+
+	r.OnDataDVBSubtitle(r.Tracks()[0], func(pts int64, data []byte) error {
+		samples = append(samples, dvbSample{pts: pts, data: data})
+		return nil
+	})
+
+	readAll(t, r)
+
+	// the empty payload must be reported, and must not reach the callback.
+	require.Equal(t, []string{"empty payload"}, decErrs)
+	require.Equal(t, []dvbSample{{
+		pts:  60 * 90000,
+		data: []byte{1, 2, 3},
+	}}, samples)
+}
+
+func TestReaderDVBSubtitlePayload(t *testing.T) {
+	mux, buf := newTestStreamMuxer(t, astits.PMTElementaryStream{
+		ElementaryPID: 123,
+		StreamType:    astits.StreamTypePrivateData,
+		ElementaryStreamDescriptors: []*astits.Descriptor{
+			{
+				Length: 1,
+				Tag:    astits.DescriptorTagSubtitling,
+				Subtitling: &astits.DescriptorSubtitling{
+					Items: []*astits.DescriptorSubtitlingItem{{
+						AncillaryPageID:   1,
+						CompositionPageID: 2,
+						Language:          []byte("eng"),
+						Type:              16,
+					}},
+				},
+			},
+		},
+	})
+
+	_, err := mux.WriteData(&astits.MuxerData{
+		PID: 123,
+		PES: &astits.PESData{
+			Header: &astits.PESHeader{
+				OptionalHeader: &astits.PESOptionalHeader{
+					MarkerBits:      2,
+					PTSDTSIndicator: astits.PTSDTSIndicatorOnlyPTS,
+					PTS:             &astits.ClockReference{Base: 123456},
+				},
+				StreamID: streamIDPrivate,
+			},
+			Data: []byte{0x20, 0x00, 0x0f, 0x00, 0x01},
+		},
+	})
+	require.NoError(t, err)
+
+	r, err := NewReader(buf)
+	require.NoError(t, err)
+
+	var decErrs []string
+
+	r.OnDecodeError(func(err error) {
+		decErrs = append(decErrs, err.Error())
+	})
+
+	var samples [][]byte
+
+	r.OnDataDVBSubtitle(r.Tracks()[0], func(pts int64, data []byte) error {
+		require.Equal(t, int64(123456), pts)
+		samples = append(samples, data)
+		return nil
+	})
+
+	readAll(t, r)
+
+	require.Empty(t, decErrs)
+	require.Equal(t, [][]byte{{0x20, 0x00, 0x0f, 0x00, 0x01}}, samples)
+}
+
+func TestReaderMPEG1AudioFrames(t *testing.T) {
+	for _, ca := range []struct {
+		name   string
+		frames [][]byte
+		af     *astits.PacketAdaptationField
+	}{
+		{
+			"single frame",
+			[][]byte{testMPEG1AudioFrame},
+			nil,
+		},
+		{
+			"multiple frames",
+			[][]byte{
+				testMPEG1AudioFrame,
+				testMPEG1AudioFrame,
+				testMPEG1AudioFrame,
+			},
+			&astits.PacketAdaptationField{
+				RandomAccessIndicator: true,
+			},
+		},
+		{
+			// 168-byte frames make the header of the second frame
+			// to be split across two TS packets.
+			"header split across packets",
+			[][]byte{
+				testMPEG1AudioFrame168,
+				testMPEG1AudioFrame168,
+			},
+			nil,
+		},
+	} {
+		t.Run(ca.name, func(t *testing.T) {
+			mux, buf := newTestStreamMuxer(t, astits.PMTElementaryStream{
+				ElementaryPID: 123,
+				StreamType:    astits.StreamTypeMPEG1Audio,
+			})
+
+			var data []byte
+			for _, frame := range ca.frames {
+				data = append(data, frame...)
+			}
+
+			_, err := mux.WriteData(&astits.MuxerData{
+				PID:             123,
+				AdaptationField: ca.af,
+				PES: &astits.PESData{
+					Header: &astits.PESHeader{
+						OptionalHeader: &astits.PESOptionalHeader{
+							MarkerBits:      2,
+							PTSDTSIndicator: astits.PTSDTSIndicatorOnlyPTS,
+							PTS:             &astits.ClockReference{Base: 30 * 90000},
+						},
+						StreamID: streamIDAudio,
+					},
+					Data: data,
+				},
+			})
+			require.NoError(t, err)
+
+			r, err := NewReader(buf)
+			require.NoError(t, err)
+
+			var decErrs []string
+
+			r.OnDecodeError(func(err error) {
+				decErrs = append(decErrs, err.Error())
+			})
+
+			var samples [][][]byte
+
+			r.OnDataMPEG1Audio(r.Tracks()[0], func(pts int64, frames [][]byte) error {
+				require.Equal(t, int64(30*90000), pts)
+				samples = append(samples, frames)
+				return nil
+			})
+
+			readAll(t, r)
+
+			require.Empty(t, decErrs)
+			require.Equal(t, [][][]byte{ca.frames}, samples)
+		})
+	}
+}
+
+func TestReaderMPEG1AudioErrors(t *testing.T) {
+	for _, ca := range []struct {
+		name   string
+		data   []byte
+		dts    *astits.ClockReference
+		empty  bool
+		errStr string
+	}{
+		{
+			"truncated frame",
+			testMPEG1AudioFrame[:200],
+			nil,
+			false,
+			"buffer is too short",
+		},
+		{
+			"PTS different than DTS",
+			testMPEG1AudioFrame,
+			&astits.ClockReference{Base: 60 * 90000},
+			false,
+			"PTS is not equal to DTS",
+		},
+		{
+			"invalid header",
+			[]byte{0x00, 0x00, 0x00, 0x00, 0x00},
+			nil,
+			false,
+			"sync word not found: 0",
+		},
+		{
+			"empty payload",
+			nil,
+			nil,
+			true,
+			"not enough bytes",
+		},
+	} {
+		t.Run(ca.name, func(t *testing.T) {
+			mux, buf := newTestStreamMuxer(t, astits.PMTElementaryStream{
+				ElementaryPID: 123,
+				StreamType:    astits.StreamTypeMPEG1Audio,
+			})
+
+			if ca.empty {
+				_, err := mux.WritePacket(emptyPayloadPESPacket(123, 15, streamIDAudio, 30*90000))
+				require.NoError(t, err)
+			} else {
+				oh := &astits.PESOptionalHeader{
+					MarkerBits:      2,
+					PTSDTSIndicator: astits.PTSDTSIndicatorOnlyPTS,
+					PTS:             &astits.ClockReference{Base: 30 * 90000},
+				}
+
+				if ca.dts != nil {
+					oh.PTSDTSIndicator = astits.PTSDTSIndicatorBothPresent
+					oh.DTS = ca.dts
+				}
+
+				_, err := mux.WriteData(&astits.MuxerData{
+					PID: 123,
+					PES: &astits.PESData{
+						Header: &astits.PESHeader{
+							OptionalHeader: oh,
+							StreamID:       streamIDAudio,
+						},
+						Data: ca.data,
+					},
+				})
+				require.NoError(t, err)
+			}
+
+			// a valid PES after the invalid one must still be readable.
+			_, err := mux.WriteData(&astits.MuxerData{
+				PID: 123,
+				PES: &astits.PESData{
+					Header: &astits.PESHeader{
+						OptionalHeader: &astits.PESOptionalHeader{
+							MarkerBits:      2,
+							PTSDTSIndicator: astits.PTSDTSIndicatorOnlyPTS,
+							PTS:             &astits.ClockReference{Base: 60 * 90000},
+						},
+						StreamID: streamIDAudio,
+					},
+					Data: testMPEG1AudioFrame,
+				},
+			})
+			require.NoError(t, err)
+
+			r, err := NewReader(buf)
+			require.NoError(t, err)
+
+			var decErrs []string
+
+			r.OnDecodeError(func(err error) {
+				decErrs = append(decErrs, err.Error())
+			})
+
+			var samples [][][]byte
+
+			r.OnDataMPEG1Audio(r.Tracks()[0], func(pts int64, frames [][]byte) error {
+				require.Equal(t, int64(60*90000), pts)
+				samples = append(samples, frames)
+				return nil
+			})
+
+			readAll(t, r)
+
+			require.Equal(t, []string{ca.errStr}, decErrs)
+			require.Equal(t, [][][]byte{{testMPEG1AudioFrame}}, samples)
+		})
+	}
+}
+
 var errCustom = errors.New("custom error")
 
 type dummyReader struct{}
@@ -2119,6 +2539,54 @@ func FuzzReader(f *testing.F) {
 		},
 	})
 
+	addPackets([]*astits.Packet{
+		{ // PAT
+			Header: astits.PacketHeader{
+				HasPayload:                true,
+				PayloadUnitStartIndicator: true,
+				PID:                       0,
+			},
+			Payload: append([]byte{
+				0x00, 0x00, 0xb0, 0x0d, 0x00, 0x00, 0xc1, 0x00,
+				0x00, 0x00, 0x01, 0xf0, 0x00, 0x71, 0x10, 0xd8,
+				0x78,
+			}, bytes.Repeat([]byte{0xff}, 167)...),
+		},
+		{ // PMT with a DVB subtitle track
+			Header: astits.PacketHeader{
+				HasPayload:                true,
+				PayloadUnitStartIndicator: true,
+				PID:                       4096,
+			},
+			Payload: append([]byte{
+				0x00, 0x02, 0xb0, 0x24, 0x00, 0x01, 0xc1, 0x00,
+				0x00, 0xe1, 0x01, 0xf0, 0x00, 0x06, 0xe1, 0x01,
+				0xf0, 0x12, 0x59, 0x10, 0x01, 0x02, 0x03, 0x16,
+				0x01, 0xc8, 0x00, 0x7b, 0x61, 0x62, 0x63, 0x0f,
+				0x00, 0x0c, 0x00, 0x21, 0xc2, 0xdc, 0x16, 0x2a,
+			}, bytes.Repeat([]byte{0xff}, 144)...),
+		},
+		{ // DVB subtitle PES with empty payload
+			AdaptationField: &astits.PacketAdaptationField{
+				Length:                169,
+				StuffingLength:        162,
+				RandomAccessIndicator: true,
+				HasPCR:                true,
+				PCR:                   &astits.ClockReference{Base: 2691000},
+			},
+			Header: astits.PacketHeader{
+				HasAdaptationField:        true,
+				HasPayload:                true,
+				PayloadUnitStartIndicator: true,
+				PID:                       257,
+			},
+			Payload: []byte{
+				0x00, 0x00, 0x01, 0xbd, 0x00, 0x08, 0x80, 0x80,
+				0x05, 0x21, 0x00, 0xa5, 0x65, 0xc1,
+			},
+		},
+	})
+
 	f.Add([]byte{
 		0x47, 0x40, 0x00, 0x10, 0x00, 0x00, 0xb0, 0x0d,
 		0x00, 0x00, 0xc1, 0x00, 0x00, 0x00, 0x01, 0xf0,
@@ -2315,6 +2783,13 @@ func FuzzReader(f *testing.F) {
 
 			case *codecs.KLV:
 				r.OnDataKLV(track, func(_ int64, data []byte) error {
+					require.NotEmpty(t, data)
+
+					return nil
+				})
+
+			case *codecs.DVBSubtitle:
+				r.OnDataDVBSubtitle(track, func(_ int64, data []byte) error {
 					require.NotEmpty(t, data)
 
 					return nil

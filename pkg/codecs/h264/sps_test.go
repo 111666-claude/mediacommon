@@ -482,6 +482,179 @@ var casesSPS = []struct {
 		1080,
 		25,
 	},
+	{
+		// monochrome (chroma_format_idc = 0) with horizontal and vertical
+		// cropping: crop offsets are in luma samples, so the right edge must
+		// actually be removed instead of being left as a black bar.
+		"1366x766 monochrome",
+		[]byte{
+			0x67, 0x64, 0x00, 0x1f, 0xf2, 0xd0, 0x0a, 0xc0,
+			0xc3, 0xc5, 0xdc, 0x20, 0x00, 0x00, 0xe1, 0x00,
+			0x00, 0x2b, 0xf2, 0x10, 0x80,
+		},
+		h264.SPS{
+			ProfileIdc:                100,
+			LevelIdc:                  31,
+			ChromaFormatIdc:           0,
+			Log2MaxFrameNumMinus4:     0,
+			PicOrderCntType:           2,
+			MaxNumRefFrames:           1,
+			PicWidthInMbsMinus1:       85,
+			PicHeightInMapUnitsMinus1: 47,
+			FrameMbsOnlyFlag:          true,
+			Direct8x8InferenceFlag:    true,
+			FrameCropping: &h264.SPS_FrameCropping{
+				RightOffset:  10,
+				BottomOffset: 2,
+			},
+			VUI: &h264.SPS_VUI{
+				TimingInfo: &h264.SPS_TimingInfo{
+					NumUnitsInTick:     1800,
+					TimeScale:          90000,
+					FixedFrameRateFlag: true,
+				},
+			},
+		},
+		1366,
+		766,
+		25,
+	},
+	{
+		// monochrome interlaced stream: frame_mbs_only_flag = 0 makes the
+		// vertical crop unit 2 luma samples.
+		"172x284 monochrome interlaced",
+		[]byte{
+			0x67, 0x64, 0x00, 0x1f, 0xf2, 0xd0, 0x58, 0x93,
+			0x95, 0x24,
+		},
+		h264.SPS{
+			ProfileIdc:                100,
+			LevelIdc:                  31,
+			ChromaFormatIdc:           0,
+			Log2MaxFrameNumMinus4:     0,
+			PicOrderCntType:           2,
+			MaxNumRefFrames:           1,
+			PicWidthInMbsMinus1:       10,
+			PicHeightInMapUnitsMinus1: 8,
+			FrameMbsOnlyFlag:          false,
+			Direct8x8InferenceFlag:    true,
+			FrameCropping: &h264.SPS_FrameCropping{
+				RightOffset:  4,
+				TopOffset:    1,
+				BottomOffset: 1,
+			},
+		},
+		172,
+		284,
+		0,
+	},
+	{
+		// 4:2:2 (chroma_format_idc = 2): horizontal crop unit is 2,
+		// vertical crop unit is 1.
+		"172x143 4:2:2",
+		[]byte{
+			0x67, 0x64, 0x00, 0x1f, 0xbc, 0xb4, 0x16, 0x27,
+			0xdd, 0x20,
+		},
+		h264.SPS{
+			ProfileIdc:                100,
+			LevelIdc:                  31,
+			ChromaFormatIdc:           2,
+			Log2MaxFrameNumMinus4:     0,
+			PicOrderCntType:           2,
+			MaxNumRefFrames:           1,
+			PicWidthInMbsMinus1:       10,
+			PicHeightInMapUnitsMinus1: 8,
+			FrameMbsOnlyFlag:          true,
+			Direct8x8InferenceFlag:    true,
+			FrameCropping: &h264.SPS_FrameCropping{
+				RightOffset:  2,
+				BottomOffset: 1,
+			},
+		},
+		172,
+		143,
+		0,
+	},
+	{
+		// 4:4:4 (chroma_format_idc = 3): crop units are 1 in both directions.
+		"174x143 4:4:4",
+		[]byte{
+			0x67, 0x64, 0x00, 0x1f, 0x91, 0x96, 0x82, 0xc4,
+			0xfb, 0xa4,
+		},
+		h264.SPS{
+			ProfileIdc:                100,
+			LevelIdc:                  31,
+			ChromaFormatIdc:           3,
+			Log2MaxFrameNumMinus4:     0,
+			PicOrderCntType:           2,
+			MaxNumRefFrames:           1,
+			PicWidthInMbsMinus1:       10,
+			PicHeightInMapUnitsMinus1: 8,
+			FrameMbsOnlyFlag:          true,
+			Direct8x8InferenceFlag:    true,
+			FrameCropping: &h264.SPS_FrameCropping{
+				RightOffset:  2,
+				BottomOffset: 1,
+			},
+		},
+		174,
+		143,
+		0,
+	},
+	{
+		// 4:4:4 with separate_colour_plane_flag: the array type becomes
+		// monochrome and crop offsets are again in luma samples.
+		"174x143 4:4:4 separate colour planes",
+		[]byte{
+			0x67, 0x64, 0x00, 0x1f, 0x93, 0x96, 0x82, 0xc4,
+			0xfb, 0xa4,
+		},
+		h264.SPS{
+			ProfileIdc:                100,
+			LevelIdc:                  31,
+			ChromaFormatIdc:           3,
+			SeparateColourPlaneFlag:   true,
+			Log2MaxFrameNumMinus4:     0,
+			PicOrderCntType:           2,
+			MaxNumRefFrames:           1,
+			PicWidthInMbsMinus1:       10,
+			PicHeightInMapUnitsMinus1: 8,
+			FrameMbsOnlyFlag:          true,
+			Direct8x8InferenceFlag:    true,
+			FrameCropping: &h264.SPS_FrameCropping{
+				RightOffset:  2,
+				BottomOffset: 1,
+			},
+		},
+		174,
+		143,
+		0,
+	},
+	{
+		// monochrome without cropping and without VUI: raw macroblock size.
+		"352x288 monochrome no VUI",
+		[]byte{
+			0x67, 0x64, 0x00, 0x1e, 0xf2, 0xd0, 0x2c, 0x12,
+			0xc8,
+		},
+		h264.SPS{
+			ProfileIdc:                100,
+			LevelIdc:                  30,
+			ChromaFormatIdc:           0,
+			Log2MaxFrameNumMinus4:     0,
+			PicOrderCntType:           2,
+			MaxNumRefFrames:           1,
+			PicWidthInMbsMinus1:       21,
+			PicHeightInMapUnitsMinus1: 17,
+			FrameMbsOnlyFlag:          true,
+			Direct8x8InferenceFlag:    true,
+		},
+		352,
+		288,
+		0,
+	},
 }
 
 func TestSPSUnmarshal(t *testing.T) {
@@ -496,6 +669,134 @@ func TestSPSUnmarshal(t *testing.T) {
 			require.Equal(t, ca.fps, sps.FPS())
 		})
 	}
+}
+
+func TestSPSUnmarshalErrors(t *testing.T) {
+	for _, ca := range []struct {
+		name string
+		byts []byte
+		err  string
+	}{
+		{
+			"empty buffer",
+			nil,
+			"not enough bits",
+		},
+		{
+			"not a SPS",
+			[]byte{0x65, 0x64, 0x00, 0x1f, 0xf2, 0xd0, 0x0a},
+			"not a SPS",
+		},
+		{
+			"truncated RBSP",
+			[]byte{
+				0x67, 0x64, 0x00, 0x1f, 0xf2, 0xd0, 0x0a, 0xc0,
+				0xc3, 0xc5,
+			},
+			"not enough bits",
+		},
+		{
+			"golomb value with too many leading zero bits",
+			[]byte{0x67, 0x64, 0x00, 0x1f, 0x00, 0x00, 0x00, 0x00, 0x01},
+			"invalid value",
+		},
+		{
+			"invalid pic_order_cnt_type",
+			[]byte{0x67, 0x63, 0x00, 0x1e, 0xc9},
+			"invalid pic_order_cnt_type: 3",
+		},
+	} {
+		t.Run(ca.name, func(t *testing.T) {
+			var sps h264.SPS
+			err := sps.Unmarshal(ca.byts)
+			require.EqualError(t, err, ca.err)
+		})
+	}
+}
+
+func TestSPSQueryStabilityAndIsolation(t *testing.T) {
+	// queries must be deterministic, work on copies and never re-parse.
+	var mono, color *struct {
+		name   string
+		byts   []byte
+		sps    h264.SPS
+		width  int
+		height int
+		fps    float64
+	}
+	for i := range casesSPS {
+		switch casesSPS[i].name {
+		case "1366x766 monochrome":
+			mono = &casesSPS[i]
+		case "1280x720":
+			color = &casesSPS[i]
+		}
+	}
+	require.NotNil(t, mono)
+	require.NotNil(t, color)
+
+	var sps h264.SPS
+	require.NoError(t, sps.Unmarshal(mono.byts))
+	for i := 0; i < 5; i++ {
+		require.Equal(t, mono.width, sps.Width())
+		require.Equal(t, mono.height, sps.Height())
+		require.Equal(t, mono.fps, sps.FPS())
+	}
+
+	// a value copy must return the same results.
+	copySPS := sps
+	require.Equal(t, mono.width, copySPS.Width())
+	require.Equal(t, mono.height, copySPS.Height())
+	require.Equal(t, mono.fps, copySPS.FPS())
+
+	// parsing another SPS into a different struct must not leak state.
+	var other h264.SPS
+	require.NoError(t, other.Unmarshal(color.byts))
+	require.Equal(t, color.width, other.Width())
+	require.Equal(t, color.height, other.Height())
+	require.Equal(t, color.fps, other.FPS())
+	require.Equal(t, mono.width, sps.Width())
+	require.Equal(t, mono.height, sps.Height())
+	require.Equal(t, mono.fps, sps.FPS())
+}
+
+func TestSPSManyLinear(t *testing.T) {
+	// Width/Height/FPS only read parsed fields: 6000 SPS must stay linear and
+	// repeated queries must return stable results without re-parsing.
+	const count = 6000
+	for i := 0; i < count; i++ {
+		var s h264.SPS
+		require.NoError(t, s.Unmarshal(casesSPS[i%len(casesSPS)].byts))
+		for j := 0; j < 3; j++ {
+			_ = s.Width()
+			_ = s.Height()
+			_ = s.FPS()
+		}
+		require.Equal(t, casesSPS[i%len(casesSPS)].width, s.Width())
+		require.Equal(t, casesSPS[i%len(casesSPS)].height, s.Height())
+		require.Equal(t, casesSPS[i%len(casesSPS)].fps, s.FPS())
+	}
+}
+
+func TestSPSOversizedCroppingNotSilentlyFixed(t *testing.T) {
+	// crop offsets exceeding the picture size are parsed as-is; Width/Height
+	// must not be clamped to zero, the arithmetic result is preserved.
+	byts := []byte{
+		0x67, 0x64, 0x00, 0x1e, 0xf2, 0xd3, 0xe0, 0x0f,
+		0xa4, 0x01, 0xf4, 0xe8,
+	}
+	var sps h264.SPS
+	require.NoError(t, sps.Unmarshal(byts))
+	require.Equal(t, &h264.SPS_FrameCropping{
+		LeftOffset:  1000,
+		RightOffset: 1000,
+	}, sps.FrameCropping)
+	// 16 - 2*1000 wraps in uint32 (no clamping) before the cast to int;
+	// mirror the production expression so the expectation is arch-independent.
+	lumaWidth := uint32(16)
+	cropOffset := uint32(1000)
+	require.Equal(t, int(lumaWidth-cropOffset-cropOffset), sps.Width())
+	require.Equal(t, 16, sps.Height())
 }
 
 func BenchmarkSPSUnmarshal(b *testing.B) {

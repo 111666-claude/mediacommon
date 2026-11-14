@@ -738,9 +738,11 @@ func (s SPS) Width() int {
 		chromaArrayType = 0
 	}
 
+	// H.264 Table 6-1: for monochrome (chromaArrayType == 0),
+	// SubWidthC is 1, so cropping is in luma samples, like SubHeightC in Height().
 	var cropUnitX uint32
 	if chromaArrayType == 0 {
-		cropUnitX = 0
+		cropUnitX = 1
 	} else {
 		cropUnitX = subWidthC
 	}

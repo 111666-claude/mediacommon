@@ -76,6 +76,7 @@ type DTSExtractor struct {
 	prevDTSFilled   bool
 	prevDTS         int64
 	randomReceived  bool
+	imageSeen       bool
 	expectedPOC     uint32
 	reorderedFrames int
 	pause           int
@@ -102,12 +103,17 @@ func NewDTSExtractor() *DTSExtractor {
 func (d *DTSExtractor) extractInner(au [][]byte, pts int64) (int64, bool, error) {
 	var idr []byte
 	var nonIDR []byte
+	recoveryPoint := false
 
-outer:
+	// first pass: update parameter sets and detect a recovery point.
+	// every NALU is inspected so that the ordering of SPS, SEI and
+	// slice NALUs within the access unit cannot pollute the state.
 	for _, nalu := range au {
-		typ := NALUType(nalu[0] & 0x1F)
+		if len(nalu) == 0 {
+			return 0, false, fmt.Errorf("empty NALU")
+		}
 
-		switch typ {
+		switch NALUType(nalu[0] & 0x1F) {
 		case NALUTypeSPS:
 			if !bytes.Equal(d.sps, nalu) {
 				var spsp SPS
@@ -120,6 +126,7 @@ outer:
 
 				// reset state
 				d.randomReceived = false
+				d.imageSeen = false
 				d.expectedPOC = 0
 				d.reorderedFrames = 0
 				d.pause = 0
@@ -129,14 +136,52 @@ outer:
 				d.prevPrevPOC = 0
 			}
 
+		case NALUTypeSEI:
+			var sei SEI
+			err := sei.Unmarshal(nalu)
+			if err != nil {
+				return 0, false, fmt.Errorf("invalid SEI: %w", err)
+			}
+
+			// a recovery point can only establish a new random
+			// access point if no image was decoded before it;
+			// otherwise it belongs to the ongoing stream and must
+			// not replace the existing reference state.
+			if sei.RecoveryPoint && !d.imageSeen {
+				recoveryPoint = true
+			}
+		}
+	}
+
+	// second pass: only one image NALU participates in the DTS
+	// computation of an access unit; an IDR takes precedence.
+	for _, nalu := range au {
+		if len(nalu) == 0 {
+			return 0, false, fmt.Errorf("empty NALU")
+		}
+
+		switch NALUType(nalu[0] & 0x1F) {
 		case NALUTypeIDR:
 			idr = nalu
-			break outer
-
 		case NALUTypeNonIDR:
-			nonIDR = nalu
-			break outer
+			if nonIDR == nil {
+				nonIDR = nalu
+			}
 		}
+	}
+
+	if idr != nil {
+		// an IDR is itself a random access point and takes
+		// precedence over a recovery point in the same unit.
+		recoveryPoint = false
+	}
+
+	// an access unit without an image only carries parameter sets
+	// and/or SEIs: it cannot produce a DTS and must not leave any
+	// flag that would affect the next access unit.
+	hasImage := idr != nil || nonIDR != nil
+	if !hasImage {
+		return 0, false, fmt.Errorf("access unit doesn't contain an IDR or non-IDR NALU")
 	}
 
 	if d.spsp == nil {
@@ -144,6 +189,7 @@ outer:
 	}
 
 	if d.spsp.PicOrderCntType == 2 || !d.spsp.FrameMbsOnlyFlag {
+		d.imageSeen = true
 		return pts, false, nil
 	}
 
@@ -152,7 +198,7 @@ outer:
 	}
 
 	if !d.randomReceived {
-		if idr == nil {
+		if idr == nil && !recoveryPoint {
 			return 0, false, fmt.Errorf("random access frame not received yet")
 		}
 		d.randomReceived = true
@@ -164,6 +210,28 @@ outer:
 	case idr != nil:
 		var err error
 		d.expectedPOC, err = getPictureOrderCount(idr, d.spsp, true)
+		if err != nil {
+			return 0, false, err
+		}
+
+		if d.pocIncrement == 2 {
+			if (d.expectedPOC % 2) != 0 {
+				d.pocIncrement = 1
+			}
+
+			d.auCount = 1
+			d.prevPrevPOC = 0
+			d.prevPOC = d.expectedPOC
+		}
+
+		ptsDTSDiff = 0
+
+	case nonIDR != nil && recoveryPoint:
+		// first image after a recovery point SEI: it is the
+		// synchronization sample and rebuilds the DTS baseline
+		// from its PTS, exactly like an IDR would.
+		var err error
+		d.expectedPOC, err = getPictureOrderCount(nonIDR, d.spsp, false)
 		if err != nil {
 			return 0, false, err
 		}
@@ -214,10 +282,10 @@ outer:
 		d.expectedPOC &= ((1 << (d.spsp.Log2MaxPicOrderCntLsbMinus4 + 4)) - 1)
 
 		ptsDTSDiff = int(pictureOrderCountDiff(poc, d.expectedPOC, d.spsp)) / d.pocIncrement
-
-	default:
-		return 0, false, fmt.Errorf("access unit doesn't contain an IDR or non-IDR NALU")
 	}
+
+	// the image of this access unit has now been consumed.
+	d.imageSeen = true
 
 	ptsDTSDiff += d.reorderedFrames
 

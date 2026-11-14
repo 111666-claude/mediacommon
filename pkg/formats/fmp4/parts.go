@@ -33,6 +33,10 @@ func (ps *Parts) Unmarshal(byts []byte) error {
 	var tfdt *amp4.Tfdt
 	var tfhd *amp4.Tfhd
 
+	// a failed decoding must not leave partially built parts,
+	// which could contain empty samples, in the receiver
+	previousParts := *ps
+
 	_, err := amp4.ReadBoxStructure(bytes.NewReader(byts), func(h *amp4.ReadHandle) (any, error) {
 		if h.BoxInfo.IsSupportedType() {
 			switch h.BoxInfo.Type.String() {
@@ -173,7 +177,11 @@ func (ps *Parts) Unmarshal(byts []byte) error {
 							size = tfhd.DefaultSampleSize
 						}
 
-						if len(ptr) < int(size) {
+						if size == 0 {
+							return nil, fmt.Errorf("invalid sample size")
+						}
+
+						if uint64(len(ptr)) < uint64(size) {
 							return nil, fmt.Errorf("invalid sample size")
 						}
 
@@ -202,10 +210,12 @@ func (ps *Parts) Unmarshal(byts []byte) error {
 		return nil, nil
 	})
 	if err != nil {
+		*ps = previousParts
 		return err
 	}
 
 	if state != waitingMoof {
+		*ps = previousParts
 		return fmt.Errorf("decode error")
 	}
 

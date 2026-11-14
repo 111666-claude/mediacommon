@@ -63,6 +63,10 @@ func (p *Presentation) Unmarshal(r io.ReadSeeker) error {
 	var curChunks []*chunk
 	var curSampleSizes []uint32
 
+	// a failed decoding must not leave partially built tracks,
+	// which could contain empty samples, in the receiver
+	previousTracks := p.Tracks
+
 	_, err := amp4.ReadBoxStructure(r, func(h *amp4.ReadHandle) (any, error) {
 		if state == readingCodec {
 			ret, err := codecBoxesReader.Read(h)
@@ -362,6 +366,10 @@ func (p *Presentation) Unmarshal(r io.ReadSeeker) error {
 					sampleSize := curSampleSizes[i]
 					sampleOffset := off
 
+					if sampleSize == 0 {
+						return nil, fmt.Errorf("invalid sample size")
+					}
+
 					curTrack.Samples[i].PayloadSize = sampleSize
 
 					curTrack.Samples[i].GetPayload = func() ([]byte, error) {
@@ -386,14 +394,17 @@ func (p *Presentation) Unmarshal(r io.ReadSeeker) error {
 		return nil, nil
 	})
 	if err != nil {
+		p.Tracks = previousTracks
 		return err
 	}
 
 	if state != waitingTrak && (state != waitingSampleProps || !stcoReceived) {
+		p.Tracks = previousTracks
 		return fmt.Errorf("parse error")
 	}
 
 	if len(p.Tracks) == 0 {
+		p.Tracks = previousTracks
 		return fmt.Errorf("no tracks found")
 	}
 

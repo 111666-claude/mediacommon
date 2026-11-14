@@ -32,7 +32,14 @@ type Presentation struct {
 }
 
 // Unmarshal decodes a Presentation.
-func (p *Presentation) Unmarshal(r io.ReadSeeker) error {
+func (p *Presentation) Unmarshal(r io.ReadSeeker) (err error) {
+	// do not leave partially-parsed tracks behind in case of errors.
+	defer func() {
+		if err != nil {
+			p.Tracks = nil
+		}
+	}()
+
 	type readState int
 
 	const (
@@ -63,7 +70,7 @@ func (p *Presentation) Unmarshal(r io.ReadSeeker) error {
 	var curChunks []*chunk
 	var curSampleSizes []uint32
 
-	_, err := amp4.ReadBoxStructure(r, func(h *amp4.ReadHandle) (any, error) {
+	_, err = amp4.ReadBoxStructure(r, func(h *amp4.ReadHandle) (any, error) {
 		if state == readingCodec {
 			ret, err := codecBoxesReader.Read(h)
 			if err != nil {
@@ -327,11 +334,30 @@ func (p *Presentation) Unmarshal(r io.ReadSeeker) error {
 			}
 			stsz := box.(*amp4.Stsz)
 
-			curSampleSizes = stsz.EntrySize
+			// the number of entries in the sample size table
+			// must match the number of samples of the track.
+			if uint64(stsz.SampleCount) != uint64(len(curTrack.Samples)) {
+				return nil, fmt.Errorf("invalid stsz: sample count mismatch")
+			}
+
+			if stsz.SampleSize != 0 {
+				// fixed size: all samples have the same size and no entry table is present.
+				curSampleSizes = make([]uint32, stsz.SampleCount)
+				for i := range curSampleSizes {
+					curSampleSizes[i] = stsz.SampleSize
+				}
+			} else {
+				// variable size: sizes are provided by the entry table.
+				if uint64(len(stsz.EntrySize)) != uint64(stsz.SampleCount) {
+					return nil, fmt.Errorf("invalid stsz: entry count mismatch")
+				}
+				curSampleSizes = stsz.EntrySize
+			}
+
 			stszReceived = true
 
 		case "stco":
-			if state != waitingSampleProps || stcoReceived {
+			if state != waitingSampleProps || stcoReceived || !stszReceived {
 				return nil, fmt.Errorf("unexpected box '%v'", h.BoxInfo.Type)
 			}
 
@@ -356,7 +382,8 @@ func (p *Presentation) Unmarshal(r io.ReadSeeker) error {
 			i := 0
 
 			for _, chunk := range curChunks {
-				off := chunk.offset
+				// accumulate in 64-bit to prevent integer overflows.
+				off := uint64(chunk.offset)
 
 				for range chunk.sampleCount {
 					sampleSize := curSampleSizes[i]
@@ -379,7 +406,7 @@ func (p *Presentation) Unmarshal(r io.ReadSeeker) error {
 						return buf, err2
 					}
 
-					off += sampleSize
+					off += uint64(sampleSize)
 					i++
 				}
 			}

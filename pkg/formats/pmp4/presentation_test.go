@@ -2,6 +2,7 @@ package pmp4
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -2473,6 +2474,8 @@ func FuzzPresentationUnmarshal(f *testing.F) {
 		f.Add(ca.enc)
 	}
 
+	f.Add(convertToFixedSampleSize(f, testBasePresentationBytes(f)))
+
 	f.Fuzz(func(t *testing.T, b []byte) {
 		var p Presentation
 		err := p.Unmarshal(bytes.NewReader(b))
@@ -2502,4 +2505,374 @@ func FuzzPresentationUnmarshal(f *testing.F) {
 		err = p.Marshal(&buf)
 		require.NoError(t, err)
 	})
+}
+
+// testBasePresentationBytes returns a marshaled presentation
+// with a single track and three 2-byte samples.
+func testBasePresentationBytes(tb testing.TB) []byte {
+	tb.Helper()
+
+	p := Presentation{
+		Tracks: []*Track{
+			{
+				ID:        1,
+				TimeScale: 90000,
+				Codec: &codecs.H264{
+					SPS: []byte{ // 1920x1080 baseline
+						0x67, 0x42, 0xc0, 0x28, 0xd9, 0x00, 0x78, 0x02,
+						0x27, 0xe5, 0x84, 0x00, 0x00, 0x03, 0x00, 0x04,
+						0x00, 0x00, 0x03, 0x00, 0xf0, 0x3c, 0x60, 0xc9, 0x20,
+					},
+					PPS: []byte{0x08, 0x06, 0x07, 0x08},
+				},
+				Samples: []*Sample{
+					{
+						Duration:    90000,
+						PayloadSize: 2,
+						GetPayload: func() ([]byte, error) {
+							return []byte{1, 2}, nil
+						},
+					},
+					{
+						Duration:    90000,
+						PayloadSize: 2,
+						GetPayload: func() ([]byte, error) {
+							return []byte{3, 4}, nil
+						},
+					},
+					{
+						Duration:    90000,
+						PayloadSize: 2,
+						GetPayload: func() ([]byte, error) {
+							return []byte{5, 6}, nil
+						},
+					},
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(tb, p.Marshal(&buf))
+	return buf.Bytes()
+}
+
+// boxOffset returns the offset of the size field and the total size
+// of the first box of the given type.
+func boxOffset(tb testing.TB, data []byte, typ string) (int, int) {
+	tb.Helper()
+
+	idx := bytes.Index(data, []byte(typ))
+	require.NotEqual(tb, -1, idx)
+
+	off := idx - 4
+	require.GreaterOrEqual(tb, off, 0)
+
+	size := int(binary.BigEndian.Uint32(data[off:]))
+	require.GreaterOrEqual(tb, size, 8)
+
+	return off, size
+}
+
+// adjustAncestorSizes subtracts delta from the size of every box
+// that contains the box at offset off.
+func adjustAncestorSizes(tb testing.TB, data []byte, off int, delta int) {
+	tb.Helper()
+
+	pos := 0
+	for pos < off {
+		bsize := int(binary.BigEndian.Uint32(data[pos:]))
+		require.GreaterOrEqual(tb, bsize, 8)
+
+		if off < pos+bsize {
+			binary.BigEndian.PutUint32(data[pos:], uint32(bsize-delta))
+			pos += 8
+		} else {
+			pos += bsize
+		}
+	}
+}
+
+// adjustSTCO subtracts delta from every entry of every stco box.
+func adjustSTCO(tb testing.TB, data []byte, delta int) {
+	tb.Helper()
+
+	searchFrom := 0
+	for {
+		idx := bytes.Index(data[searchFrom:], []byte("stco"))
+		if idx == -1 {
+			break
+		}
+		idx += searchFrom
+
+		count := int(binary.BigEndian.Uint32(data[idx+8:]))
+		for i := 0; i < count; i++ {
+			p := idx + 12 + i*4
+			v := binary.BigEndian.Uint32(data[p:])
+			binary.BigEndian.PutUint32(data[p:], v-uint32(delta))
+		}
+
+		searchFrom = idx + 12 + count*4
+	}
+}
+
+// replaceBox replaces the first box of the given type with new content,
+// adjusting ancestor box sizes and stco chunk offsets accordingly.
+func replaceBox(tb testing.TB, data []byte, typ string, newBox []byte) []byte {
+	tb.Helper()
+
+	off, size := boxOffset(tb, data, typ)
+	delta := size - len(newBox)
+
+	out := make([]byte, 0, len(data)-delta)
+	out = append(out, data[:off]...)
+	out = append(out, newBox...)
+	out = append(out, data[off+size:]...)
+
+	adjustAncestorSizes(tb, out, off, delta)
+	adjustSTCO(tb, out, delta)
+
+	return out
+}
+
+// fixedSTSZBox returns an stsz box that uses a fixed sample size
+// and therefore has no entry table.
+func fixedSTSZBox(sampleSize uint32, sampleCount uint32) []byte {
+	b := make([]byte, 20)
+	binary.BigEndian.PutUint32(b[0:], 20)
+	copy(b[4:], "stsz")
+	binary.BigEndian.PutUint32(b[12:], sampleSize)
+	binary.BigEndian.PutUint32(b[16:], sampleCount)
+	return b
+}
+
+// convertToFixedSampleSize rewrites every stsz box of a marshaled presentation
+// from the entry-table form to the fixed-sample-size form.
+// All samples of each track must have the same size.
+func convertToFixedSampleSize(tb testing.TB, data []byte) []byte {
+	tb.Helper()
+
+	out := data
+	totalDelta := 0
+
+	searchFrom := 0
+	for {
+		idx := bytes.Index(out[searchFrom:], []byte("stsz"))
+		if idx == -1 {
+			break
+		}
+		idx += searchFrom
+
+		off := idx - 4
+		size := int(binary.BigEndian.Uint32(out[off:]))
+		sampleCount := binary.BigEndian.Uint32(out[idx+12:])
+		entries := out[idx+16 : off+size]
+		require.Equal(tb, int(sampleCount)*4, len(entries))
+
+		for i := 4; i < len(entries); i += 4 {
+			require.Equal(tb, entries[:4], entries[i:i+4])
+		}
+
+		newBox := fixedSTSZBox(binary.BigEndian.Uint32(entries[:4]), sampleCount)
+
+		delta := size - len(newBox)
+
+		tmp := make([]byte, 0, len(out)-delta)
+		tmp = append(tmp, out[:off]...)
+		tmp = append(tmp, newBox...)
+		tmp = append(tmp, out[off+size:]...)
+		out = tmp
+
+		adjustAncestorSizes(tb, out, off, delta)
+		totalDelta += delta
+
+		searchFrom = off + len(newBox)
+	}
+
+	require.NotEqual(tb, 0, totalDelta)
+
+	adjustSTCO(tb, out, totalDelta)
+
+	return out
+}
+
+func TestPresentationUnmarshalFixedSampleSize(t *testing.T) {
+	enc := convertToFixedSampleSize(t, testBasePresentationBytes(t))
+
+	var p Presentation
+	err := p.Unmarshal(bytes.NewReader(enc))
+	require.NoError(t, err)
+
+	require.Len(t, p.Tracks, 1)
+	require.Len(t, p.Tracks[0].Samples, 3)
+
+	expected := [][]byte{{1, 2}, {3, 4}, {5, 6}}
+
+	for i, sa := range p.Tracks[0].Samples {
+		require.Equal(t, uint32(2), sa.PayloadSize)
+		require.Equal(t, uint32(90000), sa.Duration)
+
+		var pl []byte
+		pl, err = sa.GetPayload()
+		require.NoError(t, err)
+		require.Equal(t, expected[i], pl)
+	}
+}
+
+func TestPresentationUnmarshalFixedSampleSizeMultiTrack(t *testing.T) {
+	p0 := Presentation{
+		Tracks: []*Track{
+			{
+				ID:        1,
+				TimeScale: 90000,
+				Codec: &codecs.H264{
+					SPS: []byte{ // 1920x1080 baseline
+						0x67, 0x42, 0xc0, 0x28, 0xd9, 0x00, 0x78, 0x02,
+						0x27, 0xe5, 0x84, 0x00, 0x00, 0x03, 0x00, 0x04,
+						0x00, 0x00, 0x03, 0x00, 0xf0, 0x3c, 0x60, 0xc9, 0x20,
+					},
+					PPS: []byte{0x08, 0x06, 0x07, 0x08},
+				},
+				Samples: []*Sample{
+					{
+						Duration:    90000,
+						PayloadSize: 2,
+						GetPayload: func() ([]byte, error) {
+							return []byte{1, 2}, nil
+						},
+					},
+					{
+						Duration:    90000,
+						PayloadSize: 2,
+						GetPayload: func() ([]byte, error) {
+							return []byte{5, 6}, nil
+						},
+					},
+				},
+			},
+			{
+				ID:        2,
+				TimeScale: 90000,
+				Codec: &codecs.Opus{
+					ChannelCount: 2,
+				},
+				Samples: []*Sample{
+					{
+						Duration:    90000,
+						PayloadSize: 2,
+						GetPayload: func() ([]byte, error) {
+							return []byte{3, 4}, nil
+						},
+					},
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, p0.Marshal(&buf))
+
+	// samples of the two tracks are interleaved in mdat,
+	// therefore the first track is split into two chunks.
+	enc := convertToFixedSampleSize(t, buf.Bytes())
+
+	var p Presentation
+	err := p.Unmarshal(bytes.NewReader(enc))
+	require.NoError(t, err)
+
+	require.Len(t, p.Tracks, 2)
+
+	expected := [][][]byte{
+		{{1, 2}, {5, 6}},
+		{{3, 4}},
+	}
+
+	for i, track := range p.Tracks {
+		require.Len(t, track.Samples, len(expected[i]))
+
+		for j, sa := range track.Samples {
+			require.Equal(t, uint32(2), sa.PayloadSize)
+			require.Equal(t, uint32(90000), sa.Duration)
+
+			var pl []byte
+			pl, err = sa.GetPayload()
+			require.NoError(t, err)
+			require.Equal(t, expected[i][j], pl)
+		}
+	}
+}
+
+func TestPresentationUnmarshalSTSZErrors(t *testing.T) {
+	base := testBasePresentationBytes(t)
+
+	stszOff, stszSize := boxOffset(t, base, "stsz")
+	stszBox := base[stszOff : stszOff+stszSize]
+
+	stcoOff, stcoSize := boxOffset(t, base, "stco")
+	stcoBox := base[stcoOff : stcoOff+stcoSize]
+	require.Equal(t, stszOff+stszSize, stcoOff)
+
+	// stsz with sample_count that does not match the number of samples.
+	countMismatchEntries := make([]byte, stszSize)
+	copy(countMismatchEntries, stszBox)
+	binary.BigEndian.PutUint32(countMismatchEntries[16:], 4)
+
+	// stsz with a zero-sized entry.
+	zeroEntry := make([]byte, stszSize)
+	copy(zeroEntry, stszBox)
+	binary.BigEndian.PutUint32(zeroEntry[20+4:], 0)
+
+	// stco before stsz.
+	stcoBeforeSTSZ := make([]byte, 0, len(base))
+	stcoBeforeSTSZ = append(stcoBeforeSTSZ, base[:stszOff]...)
+	stcoBeforeSTSZ = append(stcoBeforeSTSZ, stcoBox...)
+	stcoBeforeSTSZ = append(stcoBeforeSTSZ, stszBox...)
+	stcoBeforeSTSZ = append(stcoBeforeSTSZ, base[stcoOff+stcoSize:]...)
+
+	for _, ca := range []struct {
+		name string
+		enc  []byte
+	}{
+		{
+			"fixed size, sample count mismatch",
+			replaceBox(t, base, "stsz", fixedSTSZBox(2, 4)),
+		},
+		{
+			"fixed size, huge sample count",
+			replaceBox(t, base, "stsz", fixedSTSZBox(2, 0xFFFFFFFF)),
+		},
+		{
+			"entry table, sample count mismatch",
+			replaceBox(t, base, "stsz", countMismatchEntries),
+		},
+		{
+			"zero-sized entry",
+			replaceBox(t, base, "stsz", zeroEntry),
+		},
+		{
+			"missing stsz",
+			replaceBox(t, base, "stsz", nil),
+		},
+		{
+			"duplicated stsz",
+			replaceBox(t, base, "stsz", append(append([]byte{}, stszBox...), stszBox...)),
+		},
+		{
+			"stco before stsz",
+			stcoBeforeSTSZ,
+		},
+		{
+			"truncated entries",
+			base[:stszOff+8+18],
+		},
+	} {
+		t.Run(ca.name, func(t *testing.T) {
+			var p Presentation
+			err := p.Unmarshal(bytes.NewReader(ca.enc))
+			require.Error(t, err)
+
+			// a failed parse must not leave partially-usable tracks behind.
+			require.Empty(t, p.Tracks)
+		})
+	}
 }

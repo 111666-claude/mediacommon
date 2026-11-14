@@ -14,8 +14,23 @@ type metadataAUCell struct {
 }
 
 func (c *metadataAUCell) unmarshal(buf []byte) error {
+	n, err := c.unmarshalFrom(buf)
+	if err != nil {
+		return err
+	}
+
+	if len(buf[n:]) != 0 {
+		return fmt.Errorf("unread bytes detected")
+	}
+
+	return nil
+}
+
+// unmarshalFrom decodes a cell from the beginning of buf and returns
+// the number of consumed bytes.
+func (c *metadataAUCell) unmarshalFrom(buf []byte) (int, error) {
 	if len(buf) < 5 {
-		return fmt.Errorf("buffer is too small")
+		return 0, fmt.Errorf("buffer is too small")
 	}
 
 	n := 0
@@ -33,17 +48,13 @@ func (c *metadataAUCell) unmarshal(buf []byte) error {
 	n += 2
 
 	if len(buf[n:]) < auCellDataLength {
-		return fmt.Errorf("buffer is too small")
+		return 0, fmt.Errorf("buffer is too small")
 	}
 
 	c.AUCellData = buf[n : n+auCellDataLength]
 	n += auCellDataLength
 
-	if len(buf[n:]) != 0 {
-		return fmt.Errorf("unread bytes detected")
-	}
-
-	return nil
+	return n, nil
 }
 
 func (c metadataAUCell) marshalSize() int {
@@ -51,6 +62,11 @@ func (c metadataAUCell) marshalSize() int {
 }
 
 func (c metadataAUCell) marshal() ([]byte, error) {
+	if len(c.AUCellData) > metadataAUCellMaxDataSize {
+		return nil, fmt.Errorf("AU cell data is too big: %d, maximum is %d",
+			len(c.AUCellData), metadataAUCellMaxDataSize)
+	}
+
 	buf := make([]byte, c.marshalSize())
 	n := 0
 

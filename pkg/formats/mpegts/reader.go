@@ -299,14 +299,13 @@ func (r *Reader) OnDataKLV(track *Track, cb ReaderOnDataKLVFunc) {
 
 	if codec.Synchronous {
 		r.onData[track.PID] = func(pts int64, _ int64, data []byte) error {
-			var au metadataAUCell
-			err := au.unmarshal(data)
+			out, err := readMetadataAUWrapper(data)
 			if err != nil {
 				r.onDecodeError(err)
 				return nil
 			}
 
-			return cb(pts, au.AUCellData)
+			return cb(pts, out)
 		}
 	} else {
 		r.onData[track.PID] = func(pts int64, _ int64, data []byte) error {

@@ -275,14 +275,7 @@ func (w *Writer) WriteKLV(
 	codec := track.Codec.(*CodecKLV)
 
 	if codec.Synchronous {
-		enc, err := metadataAUCell{
-			MetadataServiceID:      0,
-			SequenceNumber:         0,
-			CellFragmentIndication: 0,
-			DecoderConfigFlag:      false,
-			RandomAccessIndicator:  true,
-			AUCellData:             data,
-		}.marshal()
+		enc, err := writeMetadataAUWrapper(data)
 		if err != nil {
 			return err
 		}

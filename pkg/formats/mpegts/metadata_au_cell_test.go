@@ -58,3 +58,11 @@ func FuzzMetadataAUCell(f *testing.F) {
 		require.NoError(t, err)
 	})
 }
+
+func TestMetadataAUCellMarshalTooBig(t *testing.T) {
+	c := metadataAUCell{
+		AUCellData: make([]byte, metadataAUCellMaxDataSize+1),
+	}
+	_, err := c.marshal()
+	require.Error(t, err)
+}

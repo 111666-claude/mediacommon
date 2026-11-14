@@ -1645,3 +1645,383 @@ func FuzzReader(f *testing.F) {
 		require.NotZero(t, len(r.Tracks()))
 	})
 }
+
+// TestReaderWriterKLVSynchronousLarge checks that synchronous KLV messages
+// spanning multiple metadata_AU_cells (and therefore multiple TS packets)
+// are delivered as a single unit.
+func TestReaderWriterKLVSynchronousLarge(t *testing.T) {
+	for _, ca := range []struct {
+		name string
+		size int
+	}{
+		{"empty", 0},
+		{"below cell limit", 65528},
+		{"cell limit", 65532},
+		{"cell limit + 1", 65533},
+		{"max cell data", 65535},
+		{"two cells", 65536},
+		{"two cells + 1", 65600},
+		{"three cells", 131070},
+		{"large", 200000},
+	} {
+		t.Run(ca.name, func(t *testing.T) {
+			msg := make([]byte, ca.size)
+			for i := range msg {
+				msg[i] = byte(i * 7 >> 3)
+			}
+
+			var buf bytes.Buffer
+			w := &Writer{
+				W: &buf,
+				Tracks: []*Track{
+					{
+						Codec: &CodecKLV{
+							Synchronous: true,
+						},
+					},
+				},
+			}
+			err := w.Initialize()
+			require.NoError(t, err)
+
+			err = w.WriteKLV(w.Tracks[0], 30*90000, msg)
+			require.NoError(t, err)
+
+			// messages bigger than a single cell must span multiple TS packets
+			packetCount := buf.Len() / 188
+			if ca.size > metadataAUCellMaxDataSize {
+				require.Greater(t, packetCount, 2)
+			}
+
+			r, err := NewReader(&buf)
+			require.NoError(t, err)
+
+			var frames [][]byte
+			var decodeErrs []error
+			r.OnDecodeError(func(err error) {
+				decodeErrs = append(decodeErrs, err)
+			})
+			r.OnDataKLV(r.Tracks()[0], func(pts int64, data []byte) error {
+				require.Equal(t, int64(30*90000), pts)
+				frames = append(frames, data)
+				return nil
+			})
+
+			for {
+				err := r.Read()
+				if errors.Is(err, astits.ErrNoMorePackets) {
+					break
+				}
+				require.NoError(t, err)
+			}
+
+			require.Empty(t, decodeErrs)
+			require.Len(t, frames, 1)
+			require.Equal(t, msg, frames[0])
+		})
+	}
+}
+
+// TestReaderWriterKLVSequence checks that consecutive synchronous KLV messages
+// are not mixed with each other, nor with data of other tracks.
+func TestReaderWriterKLVSequence(t *testing.T) {
+	var buf bytes.Buffer
+	w := &Writer{
+		W: &buf,
+		Tracks: []*Track{
+			{
+				PID:   256,
+				Codec: &CodecH264{},
+			},
+			{
+				PID: 257,
+				Codec: &CodecKLV{
+					Synchronous: true,
+				},
+			},
+		},
+	}
+	err := w.Initialize()
+	require.NoError(t, err)
+
+	type klvSample struct {
+		pts  int64
+		data []byte
+	}
+
+	var klvs []klvSample
+	var vtPTS []int64
+	var videos [][][]byte
+
+	for i := 0; i < 4; i++ {
+		pts := int64(i * 90000)
+
+		media := []byte{1, 2, 3, 4 + byte(i)}
+		err = w.WriteH264(w.Tracks[0], pts, pts, [][]byte{media})
+		require.NoError(t, err)
+		vtPTS = append(vtPTS, pts)
+		videos = append(videos, [][]byte{media})
+
+		// alternate small and multi-cell messages
+		size := []int{5, 65536, 200000, 7}[i]
+		msg := bytes.Repeat([]byte{byte(i)}, size)
+		err = w.WriteKLV(w.Tracks[1], pts, msg)
+		require.NoError(t, err)
+		klvs = append(klvs, klvSample{pts: pts, data: msg})
+	}
+
+	r, err := NewReader(&buf)
+	require.NoError(t, err)
+
+	var decodeErrs []error
+	r.OnDecodeError(func(err error) {
+		decodeErrs = append(decodeErrs, err)
+	})
+
+	ki := 0
+	r.OnDataKLV(r.Tracks()[1], func(pts int64, data []byte) error {
+		require.Equal(t, klvs[ki].pts, pts)
+		require.Equal(t, klvs[ki].data, data)
+		ki++
+		return nil
+	})
+
+	vi := 0
+	r.OnDataH264(r.Tracks()[0], func(pts int64, _ int64, au [][]byte) error {
+		require.Equal(t, vtPTS[vi], pts)
+		require.Equal(t, videos[vi], au)
+		vi++
+		return nil
+	})
+
+	for {
+		err := r.Read()
+		if errors.Is(err, astits.ErrNoMorePackets) {
+			break
+		}
+		require.NoError(t, err)
+	}
+
+	require.Empty(t, decodeErrs)
+	require.Equal(t, len(klvs), ki)
+	require.Equal(t, len(vtPTS), vi)
+}
+
+// TestReaderKLVDecodeErrors checks that truncated and corrupted cell series
+// still follow the decode error contract.
+func TestReaderKLVDecodeErrors(t *testing.T) {
+	valid := func(data []byte) []byte {
+		buf, err := writeMetadataAUWrapper(data)
+		require.NoError(t, err)
+		return buf
+	}
+
+	for _, ca := range []struct {
+		name string
+		call func() ([]byte, error)
+	}{
+		{
+			"empty payload",
+			func() ([]byte, error) {
+				return readMetadataAUWrapper(nil)
+			},
+		},
+		{
+			"truncated header",
+			func() ([]byte, error) {
+				return readMetadataAUWrapper([]byte{0, 0, 0})
+			},
+		},
+		{
+			"truncated cells",
+			func() ([]byte, error) {
+				buf := valid(bytes.Repeat([]byte{0}, 65536))
+				return readMetadataAUWrapper(buf[:len(buf)-10])
+			},
+		},
+		{
+			"trailing garbage",
+			func() ([]byte, error) {
+				return readMetadataAUWrapper(append(valid([]byte{1, 2, 3}), 4))
+			},
+		},
+		{
+			"missing last fragment",
+			func() ([]byte, error) {
+				var out []byte
+				for _, ind := range []uint8{metadataAUFragmentFirst, metadataAUFragmentMiddle} {
+					buf, err := metadataAUCell{
+						SequenceNumber:         uint8(len(out)),
+						CellFragmentIndication: ind,
+						AUCellData:             []byte{1, 2},
+					}.marshal()
+					require.NoError(t, err)
+					out = append(out, buf...)
+				}
+				return readMetadataAUWrapper(out)
+			},
+		},
+		{
+			"unexpected indication in middle",
+			func() ([]byte, error) {
+				out := valid([]byte{1, 2, 3})
+				out[2] = out[2]&0x3f | metadataAUFragmentFirst<<6
+				return readMetadataAUWrapper(append(out, valid([]byte{4})...))
+			},
+		},
+		{
+			"unexpected sequence number",
+			func() ([]byte, error) {
+				var out []byte
+				for _, ca2 := range []struct {
+					seq int
+					ind uint8
+				}{
+					{0, metadataAUFragmentFirst},
+					{2, metadataAUFragmentLast},
+				} {
+					buf, err := metadataAUCell{
+						SequenceNumber:         uint8(ca2.seq),
+						CellFragmentIndication: ca2.ind,
+						AUCellData:             []byte{1, 2},
+					}.marshal()
+					require.NoError(t, err)
+					out = append(out, buf...)
+				}
+				return readMetadataAUWrapper(out)
+			},
+		},
+		{
+			"unexpected first indication",
+			func() ([]byte, error) {
+				var out []byte
+				for _, seq := range []int{0, 1} {
+					buf, err := metadataAUCell{
+						SequenceNumber:         uint8(seq),
+						CellFragmentIndication: metadataAUFragmentLast,
+						AUCellData:             []byte{1, 2},
+					}.marshal()
+					require.NoError(t, err)
+					out = append(out, buf...)
+				}
+				return readMetadataAUWrapper(out)
+			},
+		},
+	} {
+		t.Run(ca.name, func(t *testing.T) {
+			_, err := ca.call()
+			require.Error(t, err)
+		})
+	}
+}
+
+// TestReaderKLVDecodeError checks that truncated and corrupted synchronous KLV
+// payloads reach OnDecodeError and never reach the data callback.
+func TestReaderKLVDecodeError(t *testing.T) {
+	for _, ca := range []struct {
+		name string
+		cor  func([]byte) []byte
+	}{
+		{
+			"truncated header",
+			func(buf []byte) []byte {
+				return buf[:3]
+			},
+		},
+		{
+			"truncated fragments",
+			func(buf []byte) []byte {
+				return buf[:len(buf)-10]
+			},
+		},
+		{
+			"trailing garbage",
+			func(buf []byte) []byte {
+				return append(buf, 9)
+			},
+		},
+		{
+			"invalid indication",
+			func(buf []byte) []byte {
+				out := append([]byte{}, buf...)
+				out[2] = out[2]&0x3f | metadataAUFragmentLast<<6
+				return out
+			},
+		},
+		{
+			"invalid sequence number",
+			func(buf []byte) []byte {
+				out := append([]byte{}, buf...)
+				// second cell starts after the first one (65535 bytes + 5)
+				out[5+65535+1] = 5
+				return out
+			},
+		},
+	} {
+		t.Run(ca.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			w := &Writer{
+				W: &buf,
+				Tracks: []*Track{
+					{
+						Codec: &CodecKLV{
+							Synchronous: true,
+						},
+					},
+				},
+			}
+			err := w.Initialize()
+			require.NoError(t, err)
+
+			enc, err := writeMetadataAUWrapper(bytes.Repeat([]byte{1}, 65536))
+			require.NoError(t, err)
+
+			enc = ca.cor(enc)
+
+			w.leadingTrackChosen = true
+			w.Tracks[0].isLeading = true
+			w.mux.SetPCRPID(w.Tracks[0].PID)
+
+			_, err = w.mux.WriteData(&astits.MuxerData{
+				PID: w.Tracks[0].PID,
+				PES: &astits.PESData{
+					Header: &astits.PESHeader{
+						OptionalHeader: &astits.PESOptionalHeader{
+							MarkerBits:      2,
+							PTSDTSIndicator: astits.PTSDTSIndicatorOnlyPTS,
+							PTS:             &astits.ClockReference{Base: 90000},
+						},
+						StreamID: streamIDMetadata,
+					},
+					Data: enc,
+				},
+			})
+			require.NoError(t, err)
+
+			r, err := NewReader(&buf)
+			require.NoError(t, err)
+
+			received := false
+			r.OnDataKLV(r.Tracks()[0], func(_ int64, _ []byte) error {
+				received = true
+				return nil
+			})
+
+			decodeErrRecv := false
+			r.OnDecodeError(func(error) {
+				decodeErrRecv = true
+			})
+
+			for {
+				err := r.Read()
+				if errors.Is(err, astits.ErrNoMorePackets) {
+					break
+				}
+				require.NoError(t, err)
+			}
+
+			require.True(t, decodeErrRecv)
+			require.False(t, received)
+		})
+	}
+}

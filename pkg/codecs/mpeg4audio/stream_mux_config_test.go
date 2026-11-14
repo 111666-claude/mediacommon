@@ -145,9 +145,16 @@ func TestStreamMuxConfigUnmarshalTruncated(t *testing.T) {
 					ChannelCount: 1,
 				},
 				LatmBufferFullness: 255,
+				truncated:          true,
 			}},
 		}},
 	}, dec)
+
+	// the truncated config must still be marshalable without overrunning
+	// the buffer or emitting frame length fields it never carried
+	enc, err := dec.Marshal()
+	require.NoError(t, err)
+	require.Len(t, enc, dec.marshalSize())
 }
 
 func TestStreamMuxConfigMarshal(t *testing.T) {
@@ -157,6 +164,27 @@ func TestStreamMuxConfigMarshal(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, ca.enc, enc)
 		})
+	}
+}
+
+func TestStreamMuxConfigTruncatedMarshalNoOverrun(t *testing.T) {
+	// Inputs whose program_config_element byteAlign, combined with a
+	// truncated layer, used to make Marshal overrun its allocated buffer.
+	for _, b := range [][]byte{
+		[]byte("A0 \x0e00121\xff\xff000000000000000000\xff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\xffaX770+2\xff\xff\xff"),
+		[]byte("A0 \x00010A0000000000\x0f000000000000000C0A000000\x00\x0000\x00"),
+	} {
+		var conf StreamMuxConfig
+		err := conf.Unmarshal(b)
+		if err != nil {
+			continue
+		}
+
+		// Marshal must not panic and the produced length must match the
+		// computed size exactly.
+		enc, err := conf.Marshal()
+		require.NoError(t, err)
+		require.Len(t, enc, conf.marshalSize())
 	}
 }
 

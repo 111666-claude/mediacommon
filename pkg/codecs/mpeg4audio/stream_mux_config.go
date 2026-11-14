@@ -14,6 +14,11 @@ type StreamMuxConfigLayer struct {
 	FrameLength               uint
 	CELPframeLengthTableIndex uint
 	HVXCframeLengthTableIndex bool
+
+	// truncated is set when the layer was cut off while decoding and the
+	// FrameLengthType could not be read. Such a layer has no on-wire frame
+	// length fields, so marshalling must not emit any.
+	truncated bool
 }
 
 // StreamMuxConfigProgram is a program of a StreamMuxConfig.
@@ -112,8 +117,11 @@ func (c *StreamMuxConfig) unmarshalBits(buf []byte, pos *int) error {
 			var tmp uint64
 			tmp, err = bits.ReadBits(buf, pos, 3)
 			if err != nil {
-				// support truncated configs
+				// support truncated configs: the layer holds an
+				// AudioSpecificConfig but no FrameLengthType could be read,
+				// so there are no frame length fields to write back.
 				l.LatmBufferFullness = 255
+				l.truncated = true
 				c.Programs = c.Programs[:prog+1]
 				p.Layers = p.Layers[:lay+1]
 				return nil //nolint:nilerr
@@ -204,7 +212,14 @@ func (c StreamMuxConfig) marshalSizeBits() int {
 			}
 
 			if l.AudioSpecificConfig != nil {
-				n += l.AudioSpecificConfig.marshalSizeBits()
+				// n is the global bit position at which this config starts;
+				// it is needed for the program_config_element byteAlign.
+				n += l.AudioSpecificConfig.marshalSizeBitsAt(n)
+			}
+
+			if l.truncated {
+				// no FrameLengthType nor frame length fields are present
+				continue
 			}
 
 			n += 3
@@ -286,6 +301,10 @@ func (c StreamMuxConfig) marshalToBits(buf []byte, pos *int) error {
 				if err != nil {
 					return err
 				}
+			}
+
+			if l.truncated {
+				continue
 			}
 
 			bits.WriteBitsUnsafe(buf, pos, uint64(l.FrameLengthType), 3)

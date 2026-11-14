@@ -53,6 +53,11 @@ func (ps *ADTSPackets) Unmarshal(buf []byte) error {
 
 		channelConfig := ((buf[pos+2] & 0x01) << 2) | ((buf[pos+3] >> 6) & 0x03)
 		switch {
+		case channelConfig == 0:
+			// The channel layout is not described by the ADTS header:
+			// it is carried in-band by the audio data itself.
+			pkt.ChannelCount = 0
+
 		case channelConfig >= 1 && channelConfig <= 6:
 			pkt.ChannelCount = int(channelConfig)
 
@@ -123,6 +128,10 @@ func (ps ADTSPackets) Marshal() ([]byte, error) {
 
 		var channelConfig int
 		switch {
+		case pkt.ChannelCount == 0:
+			// in-band channel configuration: preserve the zero value
+			channelConfig = 0
+
 		case pkt.ChannelCount >= 1 && pkt.ChannelCount <= 6:
 			channelConfig = pkt.ChannelCount
 

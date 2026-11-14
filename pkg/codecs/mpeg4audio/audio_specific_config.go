@@ -26,6 +26,11 @@ type AudioSpecificConfig struct {
 	FrameLengthFlag    bool
 	DependsOnCoreCoder bool
 	CoreCoderDelay     uint16
+
+	// ProgramConfig is set when channelConfiguration is 0: the channel
+	// layout is then carried in-band by a program_config_element instead
+	// of by a fixed channel configuration.
+	ProgramConfig *ProgramConfigElement
 }
 
 // Unmarshal decodes a AudioSpecificConfig.
@@ -87,7 +92,9 @@ func (c *AudioSpecificConfig) unmarshalBits(buf []byte, pos *int) error {
 
 	switch {
 	case channelConfig == 0:
-		return fmt.Errorf("not yet supported")
+		// The channel layout is described in-band by a
+		// program_config_element, parsed after GASpecificConfig.
+		c.ChannelCount = 0
 
 	case channelConfig >= 1 && channelConfig <= 6:
 		c.ChannelCount = int(channelConfig)
@@ -163,10 +170,29 @@ func (c *AudioSpecificConfig) unmarshalBits(buf []byte, pos *int) error {
 		return fmt.Errorf("extensionFlag is unsupported")
 	}
 
+	if channelConfig == 0 {
+		pce := &ProgramConfigElement{}
+		err = pce.unmarshalBits(buf, pos)
+		if err != nil {
+			return err
+		}
+
+		c.ProgramConfig = pce
+		c.ChannelCount = pce.ChannelCount()
+	}
+
 	return nil
 }
 
 func (c AudioSpecificConfig) marshalSizeBits() int {
+	return c.marshalSizeBitsAt(0)
+}
+
+// marshalSizeBitsAt returns the size in bits when the config starts at
+// startPos in the surrounding bitstream. A trailing program_config_element
+// ends with a byteAlign relative to the whole bitstream, so its padding
+// depends on the global position the config is written at.
+func (c AudioSpecificConfig) marshalSizeBitsAt(startPos int) int {
 	n := 5 + 4 + 2 + 1
 
 	_, ok := reverseSampleRates[c.SampleRate]
@@ -188,6 +214,12 @@ func (c AudioSpecificConfig) marshalSizeBits() int {
 
 	if c.DependsOnCoreCoder {
 		n += 14
+	}
+
+	if c.ProgramConfig != nil {
+		// the program_config_element starts after the config prefix;
+		// its internal byteAlign is relative to that global position.
+		n += c.ProgramConfig.marshalSizeBitsAt(startPos + n)
 	}
 
 	return n
@@ -234,6 +266,9 @@ func (c AudioSpecificConfig) marshalToBits(buf []byte, pos *int) error {
 
 	var channelConfig int
 	switch {
+	case c.ProgramConfig != nil:
+		channelConfig = 0
+
 	case c.ChannelCount >= 1 && c.ChannelCount <= 6:
 		channelConfig = c.ChannelCount
 
@@ -264,6 +299,13 @@ func (c AudioSpecificConfig) marshalToBits(buf []byte, pos *int) error {
 	}
 
 	*pos++ // extensionFlag
+
+	if c.ProgramConfig != nil {
+		err := c.ProgramConfig.marshalToBits(buf, pos)
+		if err != nil {
+			return err
+		}
+	}
 
 	return nil
 }

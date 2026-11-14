@@ -49,16 +49,17 @@ func (p *Presentation) Unmarshal(r io.ReadSeeker) error {
 		waitingSampleProps
 	)
 
-	var state readState
-	var trackDuration uint32
-	var curTrack *Track
-	var codecBoxesReader *imp4.CodecBoxesReader
-
 	type chunk struct {
 		sampleCount int
 		offset      uint32
 	}
 
+	var state readState
+	var stszReceived bool
+	var stcoReceived bool
+	var trackDuration uint32
+	var curTrack *Track
+	var codecBoxesReader *imp4.CodecBoxesReader
 	var curChunks []*chunk
 	var curSampleSizes []uint32
 
@@ -106,7 +107,9 @@ func (p *Presentation) Unmarshal(r io.ReadSeeker) error {
 			return h.Expand()
 
 		case "trak":
-			if state != waitingTrak && state != waitingSampleProps {
+			// a new track can start only after the previous one has been
+			// fully described, including its chunk offset table.
+			if state != waitingTrak && (state != waitingSampleProps || !stcoReceived) {
 				return nil, fmt.Errorf("unexpected box '%v'", h.BoxInfo.Type)
 			}
 
@@ -115,6 +118,8 @@ func (p *Presentation) Unmarshal(r io.ReadSeeker) error {
 			curSampleSizes = nil
 			p.Tracks = append(p.Tracks, curTrack)
 			state = waitingTkhd
+			stszReceived = false
+			stcoReceived = false
 			return h.Expand()
 
 		case "tkhd":
@@ -314,7 +319,7 @@ func (p *Presentation) Unmarshal(r io.ReadSeeker) error {
 			}
 
 		case "stsz":
-			if state != waitingSampleProps {
+			if state != waitingSampleProps || stszReceived {
 				return nil, fmt.Errorf("unexpected box '%v'", h.BoxInfo.Type)
 			}
 
@@ -325,9 +330,12 @@ func (p *Presentation) Unmarshal(r io.ReadSeeker) error {
 			stsz := box.(*amp4.Stsz)
 
 			curSampleSizes = stsz.EntrySize
+			stszReceived = true
 
 		case "stco":
-			if state != waitingSampleProps {
+			// stco depends on the sample sizes of the current track and must
+			// not be resolved with tables belonging to other tracks.
+			if state != waitingSampleProps || !stszReceived || stcoReceived {
 				return nil, fmt.Errorf("unexpected box '%v'", h.BoxInfo.Type)
 			}
 
@@ -341,12 +349,21 @@ func (p *Presentation) Unmarshal(r io.ReadSeeker) error {
 				return nil, fmt.Errorf("invalid stco")
 			}
 
-			for i, chunk := range curChunks {
-				chunk.offset = stco.ChunkOffset[i]
-			}
-
 			if len(curSampleSizes) != len(curTrack.Samples) {
 				return nil, fmt.Errorf("invalid stsz")
+			}
+
+			sampleCount := 0
+			for _, chunk := range curChunks {
+				sampleCount += chunk.sampleCount
+			}
+
+			if sampleCount != len(curTrack.Samples) {
+				return nil, fmt.Errorf("invalid stco")
+			}
+
+			for i, chunk := range curChunks {
+				chunk.offset = stco.ChunkOffset[i]
 			}
 
 			i := 0
@@ -362,7 +379,7 @@ func (p *Presentation) Unmarshal(r io.ReadSeeker) error {
 
 					curTrack.Samples[i].GetPayload = func() ([]byte, error) {
 						_, err2 := r.Seek(int64(sampleOffset), io.SeekStart)
-						if err != nil {
+						if err2 != nil {
 							return nil, err2
 						}
 
@@ -375,6 +392,15 @@ func (p *Presentation) Unmarshal(r io.ReadSeeker) error {
 					i++
 				}
 			}
+
+			// every sample of the current track must have received an address;
+			// otherwise samples of other tracks (or no samples at all) would be
+			// used to build the payload tables.
+			if i != len(curTrack.Samples) {
+				return nil, fmt.Errorf("invalid stco")
+			}
+
+			stcoReceived = true
 		}
 
 		return nil, nil
@@ -383,7 +409,7 @@ func (p *Presentation) Unmarshal(r io.ReadSeeker) error {
 		return err
 	}
 
-	if state != waitingTrak && state != waitingSampleProps {
+	if state != waitingTrak && (state != waitingSampleProps || !stcoReceived) {
 		return fmt.Errorf("parse error")
 	}
 

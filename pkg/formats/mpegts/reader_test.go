@@ -555,14 +555,34 @@ var casesReadWriter = []struct {
 	{
 		"mpeg-4 audio LATM",
 		&mpegts.Track{
-			PID:   257,
-			Codec: &codecs.MPEG4AudioLATM{},
+			PID: 257,
+			Codec: &codecs.MPEG4AudioLATM{
+				StreamMuxConfig: &mpeg4audio.StreamMuxConfig{
+					Programs: []*mpeg4audio.StreamMuxConfigProgram{{
+						Layers: []*mpeg4audio.StreamMuxConfigLayer{{
+							AudioSpecificConfig: &mpeg4audio.AudioSpecificConfig{
+								Type:          mpeg4audio.ObjectTypeAACLC,
+								SampleRate:    24000,
+								ChannelConfig: 1,
+								ChannelCount:  1,
+							},
+							FrameLengthType:    0,
+							LatmBufferFullness: 255,
+						}},
+					}},
+				},
+			},
 		},
 		[]sample{
 			{
 				30 * 90000,
 				30 * 90000,
-				[][]byte{{3}, {2}},
+				// raw audioMuxElements: the first carries a full
+				// StreamMuxConfig, the second reuses it (useSameStreamMux).
+				[][]byte{
+					{0x20, 0x00, 0x13, 0x08, 0x1f, 0xe0, 0x08, 0x18},
+					{0x80, 0x81, 0x00},
+				},
 			},
 		},
 		[]*astits.Packet{
@@ -592,8 +612,8 @@ var casesReadWriter = []struct {
 			},
 			{ // PES
 				AdaptationField: &astits.PacketAdaptationField{
-					Length:                161,
-					StuffingLength:        154,
+					Length:                152,
+					StuffingLength:        145,
 					HasPCR:                true,
 					PCR:                   &astits.ClockReference{Base: 2691000},
 					RandomAccessIndicator: true,
@@ -605,9 +625,13 @@ var casesReadWriter = []struct {
 					PID:                       257,
 				},
 				Payload: []byte{
-					0x00, 0x00, 0x01, 0xc0, 0x00, 0x10, 0x80, 0x80,
-					0x05, 0x21, 0x00, 0xa5, 0x65, 0xc1, 0x56, 0xe0,
-					0x01, 0x03, 0x56, 0xe0, 0x01, 0x02,
+					0x00, 0x00, 0x01, 0xc0, 0x00, 0x19, 0x80, 0x80,
+					0x05, 0x21, 0x00, 0xa5, 0x65, 0xc1,
+					// LOAS frame: audioMuxElement with full StreamMuxConfig
+					0x56, 0xe0, 0x08, 0x20, 0x00, 0x13, 0x08, 0x1f,
+					0xe0, 0x08, 0x18,
+					// LOAS frame: audioMuxElement with useSameStreamMux
+					0x56, 0xe0, 0x03, 0x80, 0x81, 0x00,
 				},
 			},
 		},

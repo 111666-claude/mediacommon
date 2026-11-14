@@ -197,7 +197,14 @@ func findCodec(dem *robustDemuxer, es *astits.PMTElementaryStream) (codecs.Codec
 		}, nil
 
 	case astits.StreamTypeAACLATMAudio:
-		return &codecs.MPEG4AudioLATM{}, nil
+		conf, err := findMPEG4AudioLATMConfig(dem, es.ElementaryPID)
+		if err != nil {
+			return nil, fmt.Errorf("unable to find LATM StreamMuxConfig: %w", err)
+		}
+
+		return &codecs.MPEG4AudioLATM{
+			StreamMuxConfig: conf,
+		}, nil
 
 	case astits.StreamTypeMPEG1Audio:
 		return &codecs.MPEG1Audio{}, nil

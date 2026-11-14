@@ -193,6 +193,7 @@ type Reader struct {
 	dem           *robustDemuxer
 	onDecodeError ReaderOnDecodeErrorFunc
 	onData        map[uint16]func(int64, int64, []byte) error
+	latmStates    map[uint16]*latmState
 }
 
 // Initialize initializes a Reader.
@@ -231,6 +232,16 @@ func (r *Reader) Initialize() error {
 
 	r.onDecodeError = func(_ error) {}
 	r.onData = make(map[uint16]func(int64, int64, []byte) error)
+	r.latmStates = make(map[uint16]*latmState)
+
+	// seed LATM tracks with the StreamMuxConfig found during initialization,
+	// so useSameStreamMux elements decoded before the next full configuration
+	// can reuse it.
+	for _, track := range tracks {
+		if codec, ok := track.Codec.(*codecs.MPEG4AudioLATM); ok && codec.StreamMuxConfig != nil {
+			r.latmStates[track.PID] = &latmState{config: codec.StreamMuxConfig}
+		}
+	}
 
 	return nil
 }
@@ -417,20 +428,25 @@ func (r *Reader) OnDataMPEG4Audio(track *Track, cb ReaderOnDataMPEG4AudioFunc) {
 
 // OnDataMPEG4AudioLATM sets a callback that is called when data from an MPEG-4 Audio LATM track is received.
 func (r *Reader) OnDataMPEG4AudioLATM(track *Track, cb ReaderOnDataMPEG4AudioLATMFunc) {
+	state, ok := r.latmStates[track.PID]
+	if !ok {
+		state = &latmState{}
+		r.latmStates[track.PID] = state
+	}
+
 	r.onData[track.PID] = func(pts int64, dts int64, data []byte) error {
 		if pts != dts {
 			r.onDecodeError(fmt.Errorf("PTS is not equal to DTS"))
 			return nil
 		}
 
-		var s mpeg4audio.AudioSyncStream
-		err := s.Unmarshal(data)
+		els, err := parseLATMAudioSyncStream(state, data)
 		if err != nil {
 			r.onDecodeError(err)
 			return nil
 		}
 
-		return cb(pts, s.AudioMuxElements)
+		return cb(pts, els)
 	}
 }
 

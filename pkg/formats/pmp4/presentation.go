@@ -33,6 +33,22 @@ type Presentation struct {
 
 // Unmarshal decodes a Presentation.
 func (p *Presentation) Unmarshal(r io.ReadSeeker) error {
+	// reset the presentation, so that an Unmarshal that fails does not leave
+	// behind the state of a previous Unmarshal, and so that Unmarshal can be
+	// called multiple times on the same object.
+	p.Tracks = nil
+
+	err := p.unmarshal(r)
+	if err != nil {
+		// do not deliver a partially initialized presentation.
+		p.Tracks = nil
+		return err
+	}
+
+	return nil
+}
+
+func (p *Presentation) unmarshal(r io.ReadSeeker) error {
 	type readState int
 
 	const (
@@ -40,6 +56,7 @@ func (p *Presentation) Unmarshal(r io.ReadSeeker) error {
 		waitingMoov
 		waitingMvhd
 		waitingTrak
+		waitingEdts
 		waitingElst
 		waitingTkhd
 		waitingMdhd
@@ -132,13 +149,14 @@ func (p *Presentation) Unmarshal(r io.ReadSeeker) error {
 			tkhd := box.(*amp4.Tkhd)
 
 			curTrack.ID = int(tkhd.TrackID)
-			state = waitingElst
+			state = waitingEdts
 
 		case "edts":
-			if state != waitingElst {
+			if state != waitingEdts {
 				return nil, fmt.Errorf("unexpected box '%v'", h.BoxInfo.Type)
 			}
 
+			state = waitingElst
 			return h.Expand()
 
 		case "elst":
@@ -149,10 +167,14 @@ func (p *Presentation) Unmarshal(r io.ReadSeeker) error {
 			state = waitingMdhd
 
 		case "mdia":
-			if state != waitingMdhd {
+			// edts is optional (ISO/IEC 14496-12, section 8.6.5).
+			// when it is missing, or when it contains no elst, tkhd is followed by
+			// mdia without any edit list, and the default timeline is used.
+			if state != waitingEdts && state != waitingMdhd {
 				return nil, fmt.Errorf("unexpected box '%v'", h.BoxInfo.Type)
 			}
 
+			state = waitingMdhd
 			return h.Expand()
 
 		case "mdhd":
@@ -393,6 +415,14 @@ func (p *Presentation) Unmarshal(r io.ReadSeeker) error {
 			}
 
 			stcoReceived = true
+
+		case "mvex", "moof", "mfra":
+			// these boxes are only valid in fragmented MP4 files, whose samples
+			// are stored in moof boxes that are not read by this parser.
+			// mvex is mandatory in fragmented MP4 files and is enough to detect
+			// them even when the moof boxes are not part of the same stream;
+			// without this check, tracks would be decoded with no samples.
+			return nil, fmt.Errorf("fragmented MP4 files are not supported")
 		}
 
 		return nil, nil

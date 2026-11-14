@@ -76,6 +76,7 @@ type DTSExtractor struct {
 	prevDTSFilled   bool
 	prevDTS         int64
 	randomReceived  bool
+	recoveryPending bool
 	expectedPOC     uint32
 	reorderedFrames int
 	pause           int
@@ -102,6 +103,10 @@ func NewDTSExtractor() *DTSExtractor {
 func (d *DTSExtractor) extractInner(au [][]byte, pts int64) (int64, bool, error) {
 	var idr []byte
 	var nonIDR []byte
+	var seiRecoveryPoint bool
+	// a picture already seen in the current access unit means a recovery
+	// point found later in the same unit cannot refer to that picture.
+	var pictureBeforeSEIFound bool
 
 outer:
 	for _, nalu := range au {
@@ -120,6 +125,7 @@ outer:
 
 				// reset state
 				d.randomReceived = false
+				d.recoveryPending = false
 				d.expectedPOC = 0
 				d.reorderedFrames = 0
 				d.pause = 0
@@ -134,8 +140,23 @@ outer:
 			break outer
 
 		case NALUTypeNonIDR:
-			nonIDR = nalu
-			break outer
+			if nonIDR == nil {
+				nonIDR = nalu
+			}
+			// stop at the first coded picture when it follows an armed
+			// recovery point, either from this unit or a previous one.
+			if (seiRecoveryPoint || d.recoveryPending) && !pictureBeforeSEIFound {
+				break outer
+			}
+			pictureBeforeSEIFound = true
+
+		case NALUTypeSEI:
+			// a recovery point can only establish random access if no coded
+			// picture has been decoded before it, neither in this access unit
+			// nor in a previous one.
+			if !pictureBeforeSEIFound && !d.randomReceived && isSEIRecoveryPoint(nalu) {
+				seiRecoveryPoint = true
+			}
 		}
 	}
 
@@ -151,12 +172,22 @@ outer:
 		return 0, false, fmt.Errorf("pic_order_cnt_type = 1 is not supported yet")
 	}
 
-	if !d.randomReceived {
-		if idr == nil {
-			return 0, false, fmt.Errorf("random access frame not received yet")
+	// a recovery point carried by a previous, standalone SEI access unit is
+	// still armed until a coded picture is actually processed.
+	recoveryPoint := seiRecoveryPoint || d.recoveryPending
+
+	if !d.randomReceived && idr == nil &&
+		(nonIDR == nil || pictureBeforeSEIFound || !recoveryPoint) {
+		// no coded picture consumes the arm: keep the recovery point pending
+		// when this unit itself contains one, otherwise leave the state untouched
+		if seiRecoveryPoint {
+			d.recoveryPending = true
 		}
-		d.randomReceived = true
+		return 0, false, fmt.Errorf("random access frame not received yet")
 	}
+
+	// a coded picture is being processed: the recovery point, if any, is consumed
+	d.recoveryPending = false
 
 	var ptsDTSDiff int
 
@@ -164,6 +195,26 @@ outer:
 	case idr != nil:
 		var err error
 		d.expectedPOC, err = getPictureOrderCount(idr, d.spsp, true)
+		if err != nil {
+			return 0, false, err
+		}
+
+		if d.pocIncrement == 2 {
+			if (d.expectedPOC % 2) != 0 {
+				d.pocIncrement = 1
+			}
+
+			d.auCount = 1
+			d.prevPrevPOC = 0
+			d.prevPOC = d.expectedPOC
+		}
+
+		ptsDTSDiff = 0
+
+	case nonIDR != nil && recoveryPoint && !pictureBeforeSEIFound:
+		// Like CRA in H265: initialize state from first frame after recovery point
+		var err error
+		d.expectedPOC, err = getPictureOrderCount(nonIDR, d.spsp, false)
 		if err != nil {
 			return 0, false, err
 		}
@@ -219,6 +270,7 @@ outer:
 		return 0, false, fmt.Errorf("access unit doesn't contain an IDR or non-IDR NALU")
 	}
 
+	d.randomReceived = true
 	ptsDTSDiff += d.reorderedFrames
 
 	switch {
@@ -259,6 +311,7 @@ outer:
 }
 
 // Extract extracts the DTS of an access unit.
+// AU is assumed to contain byte slices each with at least 1 byte.
 func (d *DTSExtractor) Extract(au [][]byte, pts int64) (int64, error) {
 	dts, skipChecks, err := d.extractInner(au, pts)
 	if err != nil {

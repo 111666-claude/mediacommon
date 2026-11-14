@@ -138,6 +138,63 @@ var casesADTS = []struct {
 	},
 }
 
+// streams with crc_check (protection_absent = 0).
+// They can only be decoded, since Marshal() writes frames without CRC.
+var casesADTSCRC = []struct {
+	name string
+	byts []byte
+	pkts mpeg4audio.ADTSPackets
+}{
+	{
+		"single",
+		[]byte{
+			0xff, 0xf0, 0x4c, 0x80, 0x01, 0x7f, 0xfc, // header, frame_length = 11
+			0x12, 0x34, // crc_check
+			0xaa, 0xbb, // AU
+		},
+		mpeg4audio.ADTSPackets{
+			{
+				Type:          mpeg4audio.ObjectTypeAACLC,
+				SampleRate:    48000,
+				ChannelConfig: 2,
+				ChannelCount:  2,
+				AU:            []byte{0xaa, 0xbb},
+			},
+		},
+	},
+	{
+		"mixed",
+		[]byte{
+			0xff, 0xf0, 0x50, 0x40, 0x01, 0x7f, 0xfc, 0x12, 0x34, 0xaa, 0xbb, // with CRC
+			0xff, 0xf1, 0x4c, 0x80, 0x01, 0x3f, 0xfc, 0xcc, 0xdd, // without CRC
+			0xff, 0xf0, 0x4c, 0x80, 0x01, 0x7f, 0xfc, 0x56, 0x78, 0xee, 0xff, // with CRC
+		},
+		mpeg4audio.ADTSPackets{
+			{
+				Type:          mpeg4audio.ObjectTypeAACLC,
+				SampleRate:    44100,
+				ChannelConfig: 1,
+				ChannelCount:  1,
+				AU:            []byte{0xaa, 0xbb},
+			},
+			{
+				Type:          mpeg4audio.ObjectTypeAACLC,
+				SampleRate:    48000,
+				ChannelConfig: 2,
+				ChannelCount:  2,
+				AU:            []byte{0xcc, 0xdd},
+			},
+			{
+				Type:          mpeg4audio.ObjectTypeAACLC,
+				SampleRate:    48000,
+				ChannelConfig: 2,
+				ChannelCount:  2,
+				AU:            []byte{0xee, 0xff},
+			},
+		},
+	},
+}
+
 func TestADTSUnmarshal(t *testing.T) {
 	for _, ca := range casesADTS {
 		t.Run(ca.name, func(t *testing.T) {
@@ -146,6 +203,100 @@ func TestADTSUnmarshal(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, ca.pkts, pkts)
 		})
+	}
+}
+
+func TestADTSUnmarshalCRC(t *testing.T) {
+	for _, ca := range casesADTSCRC {
+		t.Run(ca.name, func(t *testing.T) {
+			var pkts mpeg4audio.ADTSPackets
+			err := pkts.Unmarshal(ca.byts)
+			require.NoError(t, err)
+			require.Equal(t, ca.pkts, pkts)
+		})
+	}
+}
+
+func TestADTSUnmarshalErrors(t *testing.T) {
+	for _, ca := range []struct {
+		name string
+		byts []byte
+		err  string
+	}{
+		{
+			"empty",
+			nil,
+			"invalid length",
+		},
+		{
+			"frame_length equal to header length",
+			[]byte{0xff, 0xf1, 0x4c, 0x80, 0x00, 0xff, 0xfc, 0x00},
+			"invalid FrameLen",
+		},
+		{
+			"crc, frame_length equal to header length",
+			[]byte{0xff, 0xf0, 0x4c, 0x80, 0x01, 0x3f, 0xfc, 0x12, 0x34},
+			"invalid FrameLen",
+		},
+		{
+			"crc, truncated crc_check",
+			[]byte{0xff, 0xf0, 0x4c, 0x80, 0x01, 0x7f, 0xfc, 0x12},
+			"invalid frame length",
+		},
+		{
+			"crc, truncated AU",
+			[]byte{0xff, 0xf0, 0x4c, 0x80, 0x01, 0x7f, 0xfc, 0x12, 0x34, 0xaa},
+			"invalid frame length",
+		},
+		{
+			"crc, truncated second frame",
+			[]byte{
+				0xff, 0xf0, 0x4c, 0x80, 0x01, 0x7f, 0xfc, 0x12, 0x34, 0xaa, 0xbb,
+				0xff, 0xf0, 0x4c, 0x80, 0x01, 0x7f, 0xfc, 0x56, 0x78, 0xee,
+			},
+			"invalid frame length",
+		},
+		{
+			"crc, multiple raw data blocks",
+			[]byte{0xff, 0xf0, 0x4c, 0x80, 0x01, 0x7f, 0xfd, 0x12, 0x34, 0xaa, 0xbb},
+			"frame count greater than 1 is not supported",
+		},
+	} {
+		t.Run(ca.name, func(t *testing.T) {
+			var pkts mpeg4audio.ADTSPackets
+			err := pkts.Unmarshal(ca.byts)
+			require.EqualError(t, err, ca.err)
+		})
+	}
+}
+
+func TestADTSUnmarshalManyFrames(t *testing.T) {
+	var byts []byte
+	for i := 0; i < 6000; i++ {
+		protectionAbsent := byte(0xf1)
+		fullness := byte(0x3f)
+		if i%2 == 0 {
+			protectionAbsent = 0xf0
+			fullness = 0x7f
+		}
+
+		byts = append(byts, 0xff, protectionAbsent, 0x4c, 0x80, 0x01, fullness, 0xfc)
+		if protectionAbsent == 0xf0 {
+			byts = append(byts, 0x12, 0x34)
+		}
+		byts = append(byts, byte(i>>8), byte(i))
+	}
+
+	var pkts mpeg4audio.ADTSPackets
+	err := pkts.Unmarshal(byts)
+	require.NoError(t, err)
+	require.Len(t, pkts, 6000)
+
+	for i, pkt := range pkts {
+		require.Equal(t, []byte{byte(i >> 8), byte(i)}, pkt.AU)
+		require.Equal(t, mpeg4audio.ObjectTypeAACLC, pkt.Type)
+		require.Equal(t, 48000, pkt.SampleRate)
+		require.Equal(t, uint8(2), pkt.ChannelConfig)
 	}
 }
 
@@ -161,6 +312,10 @@ func TestADTSMarshal(t *testing.T) {
 
 func FuzzADTSUnmarshal(f *testing.F) {
 	for _, ca := range casesADTS {
+		f.Add(ca.byts)
+	}
+
+	for _, ca := range casesADTSCRC {
 		f.Add(ca.byts)
 	}
 

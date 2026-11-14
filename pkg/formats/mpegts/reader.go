@@ -183,6 +183,12 @@ func writeMetadataAUWrapper(in []byte) ([]byte, error) {
 	return out, nil
 }
 
+// initializationRecordedSize is the maximum amount of data that can be read
+// while detecting tracks during Initialize. It must be large enough to
+// contain a whole access unit (a single video PES can span many TS packets):
+// it matches the maximum H264 access unit size.
+const initializationRecordedSize = 8 * 1024 * 1024
+
 // Reader is a MPEG-TS reader.
 type Reader struct {
 	R io.Reader
@@ -197,7 +203,10 @@ type Reader struct {
 
 // Initialize initializes a Reader.
 func (r *Reader) Initialize() error {
-	rr := &rewindablereader.Reader{R: r.R}
+	rr := &rewindablereader.Reader{
+		R:               r.R,
+		MaxRecordedSize: initializationRecordedSize,
+	}
 
 	r.initializeDemuxer(rr)
 

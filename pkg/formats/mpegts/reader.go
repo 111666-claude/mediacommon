@@ -62,6 +62,12 @@ type ReaderOnDataKLVFunc func(pts int64, data []byte) error
 // ReaderOnDataDVBSubtitleFunc is the prototype of the callback passed to OnDataDVBSubtitle.
 type ReaderOnDataDVBSubtitleFunc func(pts int64, data []byte) error
 
+// rewindableReaderMaxRecordedSize is the maximum size of the data that can be
+// recorded during initialization, before the reader is rewinded.
+// It must be greater than the maximum distance between the PMT and the
+// first PES of each track, that can be as big as a video frame.
+const rewindableReaderMaxRecordedSize = 8 * 1024 * 1024
+
 func findPMT(dem *robustDemuxer) (*astits.PMTData, error) {
 	for {
 		data, err := dem.nextData()
@@ -197,7 +203,7 @@ type Reader struct {
 
 // Initialize initializes a Reader.
 func (r *Reader) Initialize() error {
-	rr := &rewindablereader.Reader{R: r.R}
+	rr := &rewindablereader.Reader{R: r.R, MaxRecordedSize: rewindableReaderMaxRecordedSize}
 
 	r.initializeDemuxer(rr)
 

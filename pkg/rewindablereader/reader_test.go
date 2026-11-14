@@ -113,6 +113,55 @@ func TestReaderMaxRecordedSize(t *testing.T) {
 	require.Zero(t, n)
 }
 
+func TestReaderCustomMaxRecordedSize(t *testing.T) {
+	r := &rewindablereader.Reader{
+		R:               bytes.NewReader(make([]byte, 10)),
+		MaxRecordedSize: 8,
+	}
+
+	buf := make([]byte, 4)
+
+	n, err := r.Read(buf)
+	require.NoError(t, err)
+	require.Equal(t, 4, n)
+
+	// exactly at the custom limit: still allowed
+	n, err = r.Read(buf)
+	require.NoError(t, err)
+	require.Equal(t, 4, n)
+
+	// past the custom limit: error
+	n, err = r.Read(buf)
+	require.EqualError(t, err, "max recorded size exceeded")
+	require.Zero(t, n)
+}
+
+func TestReaderRewindConsistency(t *testing.T) {
+	data := make([]byte, 2*1024*1024)
+	for i := range data {
+		data[i] = byte(i)
+	}
+
+	r := &rewindablereader.Reader{
+		R:               bytes.NewReader(data),
+		MaxRecordedSize: 3 * 1024 * 1024,
+	}
+
+	// record the first 1.5MB
+	recorded := make([]byte, 1536*1024)
+	_, err := io.ReadFull(r, recorded)
+	require.NoError(t, err)
+	require.Equal(t, data[:len(recorded)], recorded)
+
+	r.Rewind()
+
+	// data read after the rewind must be identical to the original input
+	all := make([]byte, len(data))
+	_, err = io.ReadFull(r, all)
+	require.NoError(t, err)
+	require.Equal(t, data, all)
+}
+
 func TestReaderDifferentBufSize(t *testing.T) {
 	r := &rewindablereader.Reader{R: &dummyReader2{}}
 

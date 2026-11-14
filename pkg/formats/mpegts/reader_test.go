@@ -2715,6 +2715,171 @@ func TestReaderSkipGarbage(t *testing.T) {
 	}, aus)
 }
 
+func buildStreamWithLargeVideoFrame(t *testing.T, videoNALUSize int) []byte {
+	t.Helper()
+
+	videoNALU := append([]byte{5}, bytes.Repeat([]byte{0xAA}, videoNALUSize)...)
+	videoAU := append([]byte{0, 0, 0, 1}, videoNALU...)
+
+	audioData, err := mpeg4audio.ADTSPackets{{
+		Type:          mpeg4audio.ObjectTypeAACLC,
+		SampleRate:    48000,
+		ChannelConfig: 2,
+		ChannelCount:  1, //nolint:staticcheck
+		AU:            []byte{1, 2, 3, 4},
+	}}.Marshal()
+	require.NoError(t, err)
+
+	var buf bytes.Buffer
+	mux := astits.NewMuxer(context.Background(), &buf)
+
+	err = mux.AddElementaryStream(astits.PMTElementaryStream{
+		ElementaryPID: 256,
+		StreamType:    astits.StreamTypeH264Video,
+	})
+	require.NoError(t, err)
+
+	err = mux.AddElementaryStream(astits.PMTElementaryStream{
+		ElementaryPID: 257,
+		StreamType:    astits.StreamTypeAACAudio,
+	})
+	require.NoError(t, err)
+
+	mux.SetPCRPID(256)
+
+	// a big video PES comes first
+	_, err = mux.WriteData(&astits.MuxerData{
+		PID: 256,
+		PES: &astits.PESData{
+			Header: &astits.PESHeader{
+				OptionalHeader: &astits.PESOptionalHeader{
+					MarkerBits:      2,
+					PTSDTSIndicator: astits.PTSDTSIndicatorOnlyPTS,
+					PTS:             &astits.ClockReference{Base: 90000},
+				},
+				StreamID: 224,
+			},
+			Data: videoAU,
+		},
+	})
+	require.NoError(t, err)
+
+	// audio parameters (ADTS) only appear after the video frame
+	_, err = mux.WriteData(&astits.MuxerData{
+		PID: 257,
+		PES: &astits.PESData{
+			Header: &astits.PESHeader{
+				OptionalHeader: &astits.PESOptionalHeader{
+					MarkerBits:      2,
+					PTSDTSIndicator: astits.PTSDTSIndicatorOnlyPTS,
+					PTS:             &astits.ClockReference{Base: 180000},
+				},
+				StreamID: 192,
+			},
+			Data: audioData,
+		},
+	})
+	require.NoError(t, err)
+
+	// a second video PES: it terminates the first (unbounded) one
+	_, err = mux.WriteData(&astits.MuxerData{
+		PID: 256,
+		PES: &astits.PESData{
+			Header: &astits.PESHeader{
+				OptionalHeader: &astits.PESOptionalHeader{
+					MarkerBits:      2,
+					PTSDTSIndicator: astits.PTSDTSIndicatorOnlyPTS,
+					PTS:             &astits.ClockReference{Base: 270000},
+				},
+				StreamID: 224,
+			},
+			Data: []byte{0, 0, 0, 1, 1},
+		},
+	})
+	require.NoError(t, err)
+
+	return buf.Bytes()
+}
+
+func TestReaderLargeVideoFrame(t *testing.T) {
+	byts := buildStreamWithLargeVideoFrame(t, 2*1024*1024)
+
+	r, err := mpegts.NewReader(bytes.NewReader(byts))
+	require.NoError(t, err)
+
+	require.Equal(t, []*mpegts.Track{
+		{
+			PID:   256,
+			Codec: &codecs.H264{},
+		},
+		{
+			PID: 257,
+			Codec: &codecs.MPEG4Audio{
+				Config: mpeg4audio.AudioSpecificConfig{
+					Type:          2,
+					SampleRate:    48000,
+					ChannelConfig: 2,
+					ChannelCount:  2, //nolint:staticcheck
+				},
+			},
+		},
+	}, r.Tracks())
+
+	type event struct {
+		kind string
+		pts  int64
+	}
+
+	var recv []event
+
+	r.OnDataH264(r.Tracks()[0], func(pts int64, _ int64, au [][]byte) error {
+		switch pts {
+		case 90000:
+			require.Equal(t, [][]byte{append([]byte{5}, bytes.Repeat([]byte{0xAA}, 2*1024*1024)...)}, au)
+		case 270000:
+			require.Equal(t, [][]byte{{1}}, au)
+		default:
+			t.Errorf("unexpected pts: %d", pts)
+		}
+		recv = append(recv, event{"video", pts})
+		return nil
+	})
+
+	r.OnDataMPEG4Audio(r.Tracks()[1], func(pts int64, aus [][]byte) error {
+		require.Equal(t, int64(180000), pts)
+		require.Equal(t, [][]byte{{1, 2, 3, 4}}, aus)
+		recv = append(recv, event{"audio", pts})
+		return nil
+	})
+
+	for {
+		err = r.Read()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.NoError(t, err)
+	}
+
+	// data read after the rewind must be delivered exactly once and in
+	// demuxer order: the bounded audio PES completes first, the first
+	// (unbounded) video PES completes when the second one starts.
+	require.Equal(t, []event{
+		{"audio", 180000},
+		{"video", 90000},
+		{"video", 270000},
+	}, recv)
+}
+
+func TestReaderInitializeMaxRecordedSizeExceeded(t *testing.T) {
+	// the distance between PMT and the first audio PES exceeds the
+	// 8MB initialization buffer: initialization must fail with a
+	// diagnosable error.
+	byts := buildStreamWithLargeVideoFrame(t, 9*1024*1024)
+
+	_, err := mpegts.NewReader(bytes.NewReader(byts))
+	require.EqualError(t, err, "max recorded size exceeded")
+}
+
 func FuzzReader(f *testing.F) {
 	addPackets := func(packets []*astits.Packet) {
 		var buf bytes.Buffer

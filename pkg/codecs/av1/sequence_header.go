@@ -310,6 +310,7 @@ func (h *SequenceHeader) Unmarshal(buf []byte) error {
 		h.SeqTier = []bool{false}
 		h.DecoderModelPresentForThisOp = []bool{false}
 		h.InitialDisplayPresentForThisOp = []bool{false}
+		h.InitialDisplayDelayMinus1 = []uint8{0}
 	} else {
 		var timingInfoPresentFlag bool
 		timingInfoPresentFlag, err = bits.ReadFlag(buf, &pos)
@@ -388,7 +389,6 @@ func (h *SequenceHeader) Unmarshal(buf []byte) error {
 					}
 					h.InitialDisplayDelayMinus1[i] = uint8(tmp)
 				}
-				return fmt.Errorf("initial_display_delay_present_flag is not supported yet")
 			}
 		}
 	}

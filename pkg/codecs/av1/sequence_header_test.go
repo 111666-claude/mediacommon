@@ -167,6 +167,75 @@ var casesSequenceHeader = []struct {
 		1920,
 		1082,
 	},
+	{
+		"libaom initial display delay",
+		[]byte{
+			10, 19, 4, 0, 0, 0, 4, 0, 0, 0, 120, 128, 0, 16, 181, 76, 255, 179, 192, 26, 1,
+		},
+		SequenceHeader{
+			TimingInfo: &SequenceHeader_TimingInfo{
+				NumUnitsInDisplayTick: 1,
+				TimeScale:             30,
+			},
+			InitialDisplayDelayPresentFlag: true,
+			OperatingPointIdc:              []uint16{0},
+			SeqLevelIdx:                    []uint8{8},
+			SeqTier:                        []bool{false},
+			DecoderModelPresentForThisOp:   []bool{false},
+			InitialDisplayPresentForThisOp: []bool{true},
+			InitialDisplayDelayMinus1:      []uint8{6}, // delay = 6 + 1 = 7
+			MaxFrameWidthMinus1:            1279,
+			MaxFrameHeightMinus1:           719,
+			SeqChooseScreenContentTools:    true,
+			SeqForceScreenContentTools:     2,
+			SeqChooseIntegerMv:             true,
+			SeqForceIntegerMv:              2,
+			EnableCdef:                     true,
+			ColorConfig: SequenceHeader_ColorConfig{
+				BitDepth:                8,
+				ColorPrimaries:          2,
+				TransferCharacteristics: 2,
+				MatrixCoefficients:      2,
+				SubsamplingX:            true,
+				SubsamplingY:            true,
+			},
+		},
+		1280,
+		720,
+	},
+	{
+		"multiple operating points with initial display delay",
+		[]byte{
+			10, 14, 2, 16, 0, 66, 192, 0, 218, 166, 127, 217, 224, 13, 0, 128,
+		},
+		SequenceHeader{
+			InitialDisplayDelayPresentFlag: true,
+			OperatingPointsCntMinus1:       1,
+			OperatingPointIdc:              []uint16{0, 0},
+			SeqLevelIdx:                    []uint8{8, 13},
+			SeqTier:                        []bool{false, true},
+			DecoderModelPresentForThisOp:   []bool{false, false},
+			InitialDisplayPresentForThisOp: []bool{true, false},
+			InitialDisplayDelayMinus1:      []uint8{6, 0},
+			MaxFrameWidthMinus1:            1279,
+			MaxFrameHeightMinus1:           719,
+			SeqChooseScreenContentTools:    true,
+			SeqForceScreenContentTools:     2,
+			SeqChooseIntegerMv:             true,
+			SeqForceIntegerMv:              2,
+			EnableCdef:                     true,
+			ColorConfig: SequenceHeader_ColorConfig{
+				BitDepth:                8,
+				ColorPrimaries:          2,
+				TransferCharacteristics: 2,
+				MatrixCoefficients:      2,
+				SubsamplingX:            true,
+				SubsamplingY:            true,
+			},
+		},
+		1280,
+		720,
+	},
 }
 
 func TestSequenceHeaderUnmarshal(t *testing.T) {
@@ -180,6 +249,56 @@ func TestSequenceHeaderUnmarshal(t *testing.T) {
 			require.Equal(t, ca.height, sh.Height())
 		})
 	}
+}
+
+func TestSequenceHeaderUnmarshalTruncated(t *testing.T) {
+	for _, ca := range casesSequenceHeader {
+		t.Run(ca.name, func(t *testing.T) {
+			// find the shortest prefix that still contains all fields
+			minLen := -1
+			for i := 0; i <= len(ca.byts); i++ {
+				var sh SequenceHeader
+				if sh.Unmarshal(ca.byts[:i]) == nil {
+					minLen = i
+					break
+				}
+			}
+			require.Greater(t, minLen, 2)
+
+			// every shorter prefix misses a field and must return an error
+			for i := 0; i < minLen; i++ {
+				var sh SequenceHeader
+				err := sh.Unmarshal(ca.byts[:i])
+				require.Error(t, err, "truncated to %d bytes", i)
+			}
+		})
+	}
+}
+
+func TestSequenceHeaderUnmarshalReuse(t *testing.T) {
+	var sh SequenceHeader
+
+	// parse a header with initial display delay
+	err := sh.Unmarshal(casesSequenceHeader[4].byts)
+	require.NoError(t, err)
+	require.Equal(t, []uint8{6}, sh.InitialDisplayDelayMinus1)
+
+	// a failed parse must not leave stale state that leaks into the next one
+	err = sh.Unmarshal(casesSequenceHeader[4].byts[:10])
+	require.Error(t, err)
+
+	// parsing a header without the flag must reset all delay-related fields
+	err = sh.Unmarshal(casesSequenceHeader[0].byts)
+	require.NoError(t, err)
+	require.Equal(t, casesSequenceHeader[0].sh, sh)
+	require.False(t, sh.InitialDisplayDelayPresentFlag)
+	require.Equal(t, []uint8{0}, sh.InitialDisplayDelayMinus1)
+
+	// parsing again must give the exact same result (no state accumulation)
+	var sh2 SequenceHeader
+	err = sh2.Unmarshal(casesSequenceHeader[0].byts)
+	require.NoError(t, err)
+	require.Equal(t, sh2, sh)
 }
 
 func FuzzSequenceHeaderUnmarshal(f *testing.F) {

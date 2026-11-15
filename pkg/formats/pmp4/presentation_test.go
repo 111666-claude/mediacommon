@@ -1165,6 +1165,109 @@ func TestPresentationMarshal(t *testing.T) {
 	}
 }
 
+func TestPresentationEmptyTracks(t *testing.T) {
+	t.Run("track without samples", func(t *testing.T) {
+		p := Presentation{
+			Tracks: []*Track{
+				{
+					ID:        1,
+					TimeScale: 90000,
+					Codec: &mp4.CodecH265{
+						VPS: []byte{0x01, 0x02, 0x03, 0x04},
+						SPS: []byte{
+							0x42, 0x01, 0x01, 0x01, 0x60, 0x00, 0x00, 0x03,
+							0x00, 0x90, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03,
+							0x00, 0x78, 0xa0, 0x03, 0xc0, 0x80, 0x10, 0xe5,
+							0x96, 0x66, 0x69, 0x24, 0xca, 0xe0, 0x10, 0x00,
+							0x00, 0x03, 0x00, 0x10, 0x00, 0x00, 0x03, 0x01,
+							0xe0, 0x80,
+						},
+						PPS: []byte{0x08},
+					},
+					Samples: []*Sample{{
+						Duration:    90000,
+						PayloadSize: 2,
+						GetPayload: func() ([]byte, error) {
+							return []byte{1, 2}, nil
+						},
+					}},
+				},
+				{
+					ID:        2,
+					TimeScale: 90000,
+					Codec: &mp4.CodecVP9{
+						Width:             1920,
+						Height:            1080,
+						Profile:           1,
+						BitDepth:          8,
+						ChromaSubsampling: 1,
+						ColorRange:        false,
+					},
+				},
+			},
+		}
+
+		var buf bytes.Buffer
+		err := p.Marshal(&buf)
+		require.NoError(t, err)
+
+		var p2 Presentation
+		err = p2.Unmarshal(bytes.NewReader(buf.Bytes()))
+		require.NoError(t, err)
+
+		require.Equal(t, 2, len(p2.Tracks))
+
+		require.Equal(t, 1, p2.Tracks[0].ID)
+		require.Equal(t, uint32(90000), p2.Tracks[0].TimeScale)
+		require.Equal(t, int32(0), p2.Tracks[0].TimeOffset)
+		require.Equal(t, 1, len(p2.Tracks[0].Samples))
+		require.Equal(t, uint32(90000), p2.Tracks[0].Samples[0].Duration)
+		require.Equal(t, uint32(2), p2.Tracks[0].Samples[0].PayloadSize)
+		pl, err := p2.Tracks[0].Samples[0].GetPayload()
+		require.NoError(t, err)
+		require.Equal(t, []byte{1, 2}, pl)
+
+		require.Equal(t, 2, p2.Tracks[1].ID)
+		require.Equal(t, uint32(90000), p2.Tracks[1].TimeScale)
+		require.Equal(t, int32(0), p2.Tracks[1].TimeOffset)
+		require.Equal(t, 0, len(p2.Tracks[1].Samples))
+	})
+
+	t.Run("64 tracks without samples", func(t *testing.T) {
+		p := Presentation{}
+		for i := 1; i <= 64; i++ {
+			p.Tracks = append(p.Tracks, &Track{
+				ID:        i,
+				TimeScale: 90000,
+				Codec: &mp4.CodecVP9{
+					Width:             1920,
+					Height:            1080,
+					Profile:           1,
+					BitDepth:          8,
+					ChromaSubsampling: 1,
+					ColorRange:        false,
+				},
+			})
+		}
+
+		var buf bytes.Buffer
+		err := p.Marshal(&buf)
+		require.NoError(t, err)
+		require.Equal(t, 32092, buf.Len())
+
+		var p2 Presentation
+		err = p2.Unmarshal(bytes.NewReader(buf.Bytes()))
+		require.NoError(t, err)
+
+		require.Equal(t, 64, len(p2.Tracks))
+		for i, track := range p2.Tracks {
+			require.Equal(t, i+1, track.ID)
+			require.Equal(t, uint32(90000), track.TimeScale)
+			require.Equal(t, 0, len(track.Samples))
+		}
+	})
+}
+
 func FuzzPresentationUnmarshal(f *testing.F) {
 	for _, ca := range casesPresentation {
 		f.Add(ca.enc)

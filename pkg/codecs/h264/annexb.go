@@ -8,134 +8,153 @@ import (
 // ErrAnnexBNoNALUs is returned by AnnexBUnmarshal when no NALUs have been decoded.
 var ErrAnnexBNoNALUs = errors.New("Annex-B unit doesn't contain any NALU")
 
+// ErrAnnexBNoInitialDelimiter is returned by AnnexBUnmarshal when the initial delimiter is not found.
+var ErrAnnexBNoInitialDelimiter = errors.New("initial delimiter not found")
+
 // AnnexBUnmarshal decodes an access unit from the Annex-B stream format.
 // Specification: ITU-T Rec. H.264, Annex B
+//
+// The pseudo logic from ITU-T Rec. H.264, Annex B:
+//
+//	byte_stream_nal_unit(NumBytesInNALunit) {
+//	    while (next_bits(24) != 0x000001 &&
+//	           next_bits(32) != 0x00000001)
+//	        leading_zero_8bits /* equal to 0x00 */
+//
+//	    if (next_bits(24) != 0x000001)
+//	        zero_byte /* equal to 0x00 */
+//
+//	    if (more_data_in_byte_stream()) {
+//	        start_code_prefix_one_3bytes /* equal to 0x000001 */
+//	        nal_unit(NumBytesInNALunit)
+//	    }
+//
+//	    while (more_data_in_byte_stream() &&
+//	           next_bits(24) != 0x000001 &&
+//	           next_bits(32) != 0x00000001)
+//	        trailing_zero_8bits /* equal to 0x00 */
+//	}
 func AnnexBUnmarshal(buf []byte) ([][]byte, error) {
-	bl := len(buf)
-	initZeroCount := 0
-	i := 0
-
-outer:
-	for {
-		if i >= bl || i >= 4 {
-			return nil, fmt.Errorf("initial delimiter not found")
-		}
-
-		switch initZeroCount {
-		case 0, 1:
-			if buf[i] != 0 {
-				return nil, fmt.Errorf("initial delimiter not found")
-			}
-			initZeroCount++
-
-		case 2, 3:
-			switch buf[i] {
-			case 1:
-				break outer
-
-			case 0:
-
-			default:
-				return nil, fmt.Errorf("initial delimiter not found")
-			}
-			initZeroCount++
-		}
-
-		i++
+	count, err := annexBCountNALUs(buf)
+	if err != nil {
+		return nil, err
+	}
+	if count == 0 {
+		return nil, ErrAnnexBNoNALUs
+	}
+	if !annexBHasInitialDelimiter(buf) {
+		return nil, ErrAnnexBNoInitialDelimiter
 	}
 
-	start := initZeroCount + 1
-	zeroCount := 0
-	n := 0
-	delimStart := 0
-	auSize := 0
+	au := make([][]byte, 0, count)
+	i := 0
+	start := 0
 
-	for i := start; i < bl; i++ {
-		switch buf[i] {
-		case 0:
-			if zeroCount == 0 {
-				delimStart = i
+	for i < len(buf) {
+		lim := 4
+		if lim > len(buf)-i {
+			lim = len(buf) - i
+		}
+		data := buf[i : i+lim]
+
+		switch {
+		case len(data) >= 3 && data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x01:
+			// NALU with a 3-byte start code prefix.
+			if i > start {
+				au = append(au, buf[start:i])
 			}
-			zeroCount++
+			i += 3
+			start = i
 
-		case 1:
-			if zeroCount == 2 || zeroCount == 3 {
-				l := delimStart - start
-
-				if l != 0 {
-					if (auSize + l) > MaxAccessUnitSize {
-						return nil, fmt.Errorf("access unit size (%d) is too big, maximum is %d", auSize+l, MaxAccessUnitSize)
-					}
-					n++
-				}
-
-				auSize += l
-				start = i + 1
+		case len(data) >= 4 && data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x00 && data[3] == 0x01:
+			// NALU with a 4-byte start code prefix.
+			// The last byte of a NALU is kept even when it is 0x00: the first zero
+			// of the run is part of the NALU, while the remaining ones belong to the
+			// start code prefix.
+			if i > start {
+				au = append(au, buf[start:i])
 			}
-			zeroCount = 0
+			i += 4
+			start = i
 
 		default:
-			zeroCount = 0
+			i++
 		}
 	}
 
-	l := bl - start
+	if i > start {
+		au = append(au, buf[start:i])
+	}
 
-	if l != 0 {
-		if (auSize + l) > MaxAccessUnitSize {
-			return nil, fmt.Errorf("access unit size (%d) is too big, maximum is %d", auSize+l, MaxAccessUnitSize)
+	return au, nil
+}
+
+// annexBCountNALUs counts the NALUs contained in an Annex-B stream and checks
+// that their total size does not exceed MaxAccessUnitSize.
+func annexBCountNALUs(buf []byte) (int, error) {
+	n := 0
+	i := 0
+	start := 0
+	auSize := 0
+
+	for i < len(buf) {
+		lim := 4
+		if lim > len(buf)-i {
+			lim = len(buf) - i
+		}
+		data := buf[i : i+lim]
+
+		switch {
+		case len(data) >= 3 && data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x01:
+			if i > start {
+				auSize += i - start
+				if auSize > MaxAccessUnitSize {
+					return 0, fmt.Errorf("access unit size (%d) is too big, maximum is %d",
+						auSize, MaxAccessUnitSize)
+				}
+				n++
+			}
+			i += 3
+			start = i
+
+		case len(data) >= 4 && data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x00 && data[3] == 0x01:
+			if i > start {
+				auSize += i - start
+				if auSize > MaxAccessUnitSize {
+					return 0, fmt.Errorf("access unit size (%d) is too big, maximum is %d",
+						auSize, MaxAccessUnitSize)
+				}
+				n++
+			}
+			i += 4
+			start = i
+
+		default:
+			i++
+		}
+	}
+
+	if i > start {
+		if (auSize + i - start) > MaxAccessUnitSize {
+			return 0, fmt.Errorf("access unit size (%d) is too big, maximum is %d",
+				auSize+i-start, MaxAccessUnitSize)
 		}
 		n++
 	}
 
-	if n == 0 {
-		return nil, ErrAnnexBNoNALUs
+	return n, nil
+}
+
+func annexBHasInitialDelimiter(buf []byte) bool {
+	switch {
+	case len(buf) >= 4 && buf[0] == 0x00 && buf[1] == 0x00 && buf[2] == 0x00 && buf[3] == 0x01:
+		return true
+
+	case len(buf) >= 3 && buf[0] == 0x00 && buf[1] == 0x00 && buf[2] == 0x01:
+		return true
 	}
 
-	if n > MaxNALUsPerAccessUnit {
-		return nil, fmt.Errorf("NALU count (%d) exceeds maximum allowed (%d)",
-			n, MaxNALUsPerAccessUnit)
-	}
-
-	ret := make([][]byte, n)
-	pos := 0
-	start = initZeroCount + 1
-	zeroCount = 0
-	delimStart = 0
-
-	for i := start; i < bl; i++ {
-		switch buf[i] {
-		case 0:
-			if zeroCount == 0 {
-				delimStart = i
-			}
-			zeroCount++
-
-		case 1:
-			if zeroCount == 2 || zeroCount == 3 {
-				l = delimStart - start
-
-				if l != 0 {
-					ret[pos] = buf[start:delimStart]
-					pos++
-				}
-
-				start = i + 1
-			}
-			zeroCount = 0
-
-		default:
-			zeroCount = 0
-		}
-	}
-
-	l = bl - start
-
-	if l != 0 {
-		ret[pos] = buf[start:bl]
-	}
-
-	return ret, nil
+	return false
 }
 
 func annexBMarshalSize(au [][]byte) int {

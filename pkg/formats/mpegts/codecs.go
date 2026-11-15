@@ -29,6 +29,11 @@ type CodecH264 = codecs.H264
 // Deprecated: use codecs.H265
 type CodecH265 = codecs.H265
 
+// CodecID3 is a timed ID3 metadata codec.
+//
+// Deprecated: use codecs.ID3
+type CodecID3 = codecs.ID3
+
 // CodecKLV is a KLV codec.
 //
 // Deprecated: use codecs.KLV

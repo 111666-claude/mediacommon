@@ -1037,6 +1037,69 @@ var casesReadWriter = []struct {
 		},
 	},
 	{
+		"id3",
+		&mpegts.Track{
+			PID:   257,
+			Codec: &codecs.ID3{},
+		},
+		[]sample{
+			{
+				30 * 90000,
+				30 * 90000,
+				[][]byte{{'I', 'D', '3', 4, 0, 0, 0, 0, 0, 3, 1, 2, 3}},
+			},
+		},
+		[]*astits.Packet{
+			{ // PMT
+				Header: astits.PacketHeader{
+					HasPayload:                true,
+					PayloadUnitStartIndicator: true,
+					PID:                       0,
+				},
+				Payload: append([]byte{
+					0x00, 0x00, 0xb0, 0x0d, 0x00, 0x00, 0xc1, 0x00,
+					0x00, 0x00, 0x01, 0xf0, 0x00, 0x71, 0x10, 0xd8,
+					0x78,
+				}, bytes.Repeat([]byte{0xff}, 167)...),
+			},
+			{ // PAT
+				Header: astits.PacketHeader{
+					HasPayload:                true,
+					PayloadUnitStartIndicator: true,
+					PID:                       4096,
+				},
+				Payload: append([]byte{
+					0x00, 0x02, 0xb0, 0x21, 0x00, 0x01, 0xc1, 0x00,
+					0x00, 0xe1, 0x01, 0xf0, 0x00, 0x15, 0xe1, 0x01,
+					0xf0, 0x0f, 0x26, 0x0d, 0xff, 0xff, 0x49, 0x44,
+					0x33, 0x20, 0xff, 0x49, 0x44, 0x33, 0x20, 0x00,
+					0x0f, 0x4b, 0x07, 0xc6, 0x79,
+				}, bytes.Repeat([]byte{0xff}, 147)...),
+			},
+			{ // PES
+				AdaptationField: &astits.PacketAdaptationField{
+					Length:                156,
+					StuffingLength:        149,
+					RandomAccessIndicator: true,
+					HasPCR:                true,
+					PCR:                   &astits.ClockReference{Base: 2691000},
+				},
+				Header: astits.PacketHeader{
+					HasAdaptationField:        true,
+					HasPayload:                true,
+					PayloadUnitStartIndicator: true,
+					PID:                       257,
+				},
+				Payload: []byte{
+					0x00, 0x00, 0x01, 0xbd, 0x00, 0x15, 0x80, 0x80,
+					0x05, 0x21, 0x00, 0xa5, 0x65, 0xc1, 0x49, 0x44,
+					0x33, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03,
+					0x01, 0x02, 0x03,
+				},
+			},
+		},
+	},
+	{
 		"klv sync",
 		&mpegts.Track{
 			PID: 257,
@@ -1389,6 +1452,14 @@ func TestReader(t *testing.T) {
 				r.OnDataDVBSubtitle(ca.track, func(pts int64, data []byte) error {
 					require.Equal(t, ca.samples[i].pts, pts)
 					require.Equal(t, ca.samples[i].data[0], data)
+					i++
+					return nil
+				})
+
+			case *codecs.ID3:
+				r.OnDataID3(ca.track, func(pts int64, tag []byte) error {
+					require.Equal(t, ca.samples[i].pts, pts)
+					require.Equal(t, ca.samples[i].data[0], tag)
 					i++
 					return nil
 				})
@@ -3244,6 +3315,13 @@ func FuzzReader(f *testing.F) {
 			case *codecs.DVBSubtitle:
 				r.OnDataDVBSubtitle(track, func(_ int64, data []byte) error {
 					require.NotEmpty(t, data)
+
+					return nil
+				})
+
+			case *codecs.ID3:
+				r.OnDataID3(track, func(_ int64, tag []byte) error {
+					require.NotEmpty(t, tag)
 
 					return nil
 				})

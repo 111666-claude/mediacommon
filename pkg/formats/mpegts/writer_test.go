@@ -61,6 +61,9 @@ func TestWriter(t *testing.T) {
 				case *codecs.DVBSubtitle:
 					err = w.WriteDVBSubtitle(ca.track, sample.pts, sample.data[0])
 
+				case *codecs.ID3:
+					err = w.WriteID3(ca.track, sample.pts, sample.data[0])
+
 				default:
 					panic("unexpected")
 				}

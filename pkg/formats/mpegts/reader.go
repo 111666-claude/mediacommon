@@ -64,6 +64,9 @@ type ReaderOnDataEAC3Func func(pts int64, frame []byte) error
 // ReaderOnDataKLVFunc is the prototype of the callback passed to OnDataKLV.
 type ReaderOnDataKLVFunc func(pts int64, data []byte) error
 
+// ReaderOnDataID3Func is the prototype of the callback passed to OnDataID3.
+type ReaderOnDataID3Func func(pts int64, tag []byte) error
+
 // ReaderOnDataDVBSubtitleFunc is the prototype of the callback passed to OnDataDVBSubtitle.
 type ReaderOnDataDVBSubtitleFunc func(pts int64, data []byte) error
 
@@ -536,6 +539,21 @@ func (r *Reader) OnDataKLV(track *Track, cb ReaderOnDataKLVFunc) {
 
 			return cb(pts, data)
 		}
+	}
+}
+
+// OnDataID3 sets a callback that is called when data from a timed ID3 track is received.
+// The tag is validated before being passed to the callback; malformed tags are reported
+// through OnDecodeError and are not returned.
+func (r *Reader) OnDataID3(track *Track, cb ReaderOnDataID3Func) {
+	r.onData[track.PID] = func(pts int64, _ int64, data []byte) error {
+		err := validateID3Tag(data)
+		if err != nil {
+			r.onDecodeError(fmt.Errorf("invalid ID3 tag: %w", err))
+			return nil
+		}
+
+		return cb(pts, data)
 	}
 }
 

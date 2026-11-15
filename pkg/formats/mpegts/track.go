@@ -15,6 +15,7 @@ import (
 const (
 	opusIdentifier = 'O'<<24 | 'p'<<16 | 'u'<<8 | 's'
 	klvaIdentifier = 'K'<<24 | 'L'<<16 | 'V'<<8 | 'A'
+	id3Identifier  = 'I'<<24 | 'D'<<16 | '3'<<8 | ' '
 )
 
 // MISB ST 1402, Table 4
@@ -176,6 +177,28 @@ func findKLVMetadataDescriptor(descriptors []*astits.Descriptor) *substructs.Met
 	return ret
 }
 
+func findID3MetadataDescriptor(descriptors []*astits.Descriptor) bool {
+	ret := false
+	for _, sd := range descriptors {
+		if sd.Unknown != nil && sd.Unknown.Tag == substructs.DescriptorTagMetadata {
+			var dm substructs.MetadataDescriptor
+			err := dm.Unmarshal(sd.Unknown.Content)
+			if err != nil {
+				continue
+			}
+
+			if dm.MetadataFormatIdentifier == id3Identifier {
+				// in case of multiple metadata, do not return anything
+				if ret {
+					return false
+				}
+				ret = true
+			}
+		}
+	}
+	return ret
+}
+
 func findDVBSubtitlingDescriptor(descriptors []*astits.Descriptor) []*astits.DescriptorSubtitlingItem {
 	for _, sd := range descriptors {
 		if sd.Tag == astits.DescriptorTagSubtitling && sd.Subtitling != nil {
@@ -283,6 +306,11 @@ func findCodec(dem *robustDemuxer, es *astits.PMTElementaryStream) (codecs.Codec
 				return &codecs.KLV{
 					Synchronous: false,
 				}, nil
+
+			case id3Identifier:
+				// some muxers signal timed ID3 tracks with a registration descriptor
+				// instead of a metadata descriptor.
+				return &codecs.ID3{}, nil
 			}
 		} else if items := findDVBSubtitlingDescriptor(es.ElementaryStreamDescriptors); items != nil {
 			return &codecs.DVBSubtitle{
@@ -291,6 +319,10 @@ func findCodec(dem *robustDemuxer, es *astits.PMTElementaryStream) (codecs.Codec
 		}
 
 	case astits.StreamTypeMetadata:
+		if findID3MetadataDescriptor(es.ElementaryStreamDescriptors) {
+			return &codecs.ID3{}, nil
+		}
+
 		desc := findKLVMetadataDescriptor(es.ElementaryStreamDescriptors)
 		if desc != nil {
 			return &codecs.KLV{
@@ -528,6 +560,36 @@ func (t Track) marshal() (*astits.PMTElementaryStream, error) {
 		}
 
 		// other
+
+	case *codecs.ID3:
+		metadataDesc, err := substructs.MetadataDescriptor{
+			MetadataApplicationFormat:           0xFFFF,
+			MetadataApplicationFormatIdentifier: id3Identifier,
+			MetadataFormat:                      0xFF,
+			MetadataFormatIdentifier:            id3Identifier,
+			MetadataServiceID:                   0x00,
+			DecoderConfigFlags:                  0,
+			DSMCCFlag:                           false,
+		}.Marshal()
+		if err != nil {
+			return nil, err
+		}
+
+		es = &astits.PMTElementaryStream{
+			ElementaryPID: t.PID,
+			StreamType:    astits.StreamTypeMetadata,
+			ElementaryStreamDescriptors: []*astits.Descriptor{
+				{
+					// Length must be different than zero.
+					// https://github.com/asticode/go-astits/blob/7c2bf6b71173d24632371faa01f28a9122db6382/descriptor.go#L2146-L2148
+					Length: 1,
+					Tag:    substructs.DescriptorTagMetadata,
+					Unknown: &astits.DescriptorUnknown{
+						Content: metadataDesc,
+					},
+				},
+			},
+		}
 
 	case *codecs.KLV:
 		if c.Synchronous {

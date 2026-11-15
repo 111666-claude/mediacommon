@@ -47,6 +47,7 @@ Go &ge; 1.26 is required.
 | ISO 13818-1, Generic coding of moving pictures and associated audio information: Systems                                                                                                                    | formats / MPEG-TS                 |
 | [ETSI TS Opus 0.1.3-draft, Opus Interactive Audio Codec Transport Multiplexing Standard](https://opus-codec.org/docs/ETSI_TS_opus-v0.1.3-draft.pdf)                                                         | formats / MPEG-TS + Opus          |
 | [MISB ST 1402, MPEG-2 Transport Stream for Class 1/Class 2 Motion Imagery, Audio and Metadata](https://nsgreg.nga.mil/doc/view?i=4273)                                                                      | formats / MPEG-TS + KLV           |
+| [ID3 Tag Version 2.4.0](https://id3.org/id3v2.4.0-structure)                                                                                                                                                | formats / MPEG-TS + ID3           |
 | [ETSI EN 300 743, Digital Video Broadcasting (DVB), Subtitling systems](https://www.etsi.org/deliver/etsi_en/300700_300799/300743/01.06.01_20/en_300743v010601a.pdf)                                        | formats / MPEG-TS + DVB subtitles |
 | [ETSI EN 300 468, Digital Video Broadcasting (DVB), Specification for Service Information (SI) in DVB systems](https://www.etsi.org/deliver/etsi_en/300400_300499/300468/01.17.01_20/en_300468v011701a.pdf) | formats / MPEG-TS + DVB subtitles |
 

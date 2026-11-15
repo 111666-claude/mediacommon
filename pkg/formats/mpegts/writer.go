@@ -329,6 +329,22 @@ func (w *Writer) WriteKLV(
 	return w.writeData(track, false, 0, streamIDPrivate, unit)
 }
 
+// WriteID3 writes a timed ID3 tag.
+// The tag is written verbatim, in a dedicated PES packet that carries pts.
+// Invalid or truncated tags are rejected before being written.
+func (w *Writer) WriteID3(
+	track *Track,
+	pts int64,
+	tag []byte,
+) error {
+	err := validateID3Tag(tag)
+	if err != nil {
+		return fmt.Errorf("invalid ID3 tag: %w", err)
+	}
+
+	return w.writeData(track, true, pts, streamIDPrivate, tag)
+}
+
 // WriteDVBSubtitle writes DVB subtitle data.
 func (w *Writer) WriteDVBSubtitle(
 	track *Track,

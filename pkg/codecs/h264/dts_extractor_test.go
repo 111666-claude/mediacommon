@@ -541,6 +541,43 @@ func TestDTSExtractor(t *testing.T) {
 	}
 }
 
+func TestDTSExtractorContinuation(t *testing.T) {
+	seq := casesDTSExtractor[0].sequence
+
+	var sps []byte
+	for _, n := range seq[0].au {
+		if NALUType(n[0]&0x1F) == NALUTypeSPS {
+			sps = n
+		}
+	}
+	require.NotEmpty(t, sps)
+
+	ex := NewDTSExtractor()
+
+	// first segment
+	for _, smp := range seq {
+		_, err := ex.Extract(smp.au, smp.pts)
+		require.NoError(t, err)
+	}
+
+	// a parameter update with a changed SPS must not restart the DTS
+	// timeline. Flip a VUI byte that is irrelevant to POC/DTS parsing.
+	changedSPS := append([]byte(nil), sps...)
+	changedSPS[len(changedSPS)-1] ^= 0x01
+	updateAU := append(append([][]byte{}, changedSPS), seq[4].au...)
+
+	prevDTS := ex.prevDTS
+	dts, err := ex.Extract(updateAU, 120000)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, dts, prevDTS) // no jump back onto a new timeline
+	require.Less(t, dts, int64(120000))     // first-frame restart would return PTS
+
+	// the following frame keeps advancing from the same timeline
+	dts, err = ex.Extract(seq[5].au, 130000)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, dts, prevDTS)
+}
+
 func serializeSequence(seq []sample) []byte {
 	var buf []byte
 

@@ -120,8 +120,9 @@ func (d *DTSExtractor) extractInner(au [][]byte, pts int64) (int64, bool, error)
 				d.sps = nalu
 				d.spsp = &spsp
 
-				// reset state
-				d.prevDTSFilled = false
+				// reset state. The DTS timeline (prevDTS / prevDTSFilled) is
+				// intentionally not reset: parameter updates and keyframes
+				// continue the same stream, so no stale offset is reused.
 				d.expectedPOC = 0
 				d.reorderedFrames = 0
 				d.pause = 0

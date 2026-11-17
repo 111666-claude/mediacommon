@@ -59,6 +59,33 @@ func TestEmulationPreventionRemove(t *testing.T) {
 	}
 }
 
+func TestEmulationPreventionAdd(t *testing.T) {
+	require.Equal(t,
+		[]byte{0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0x00, 0x01, 0x00, 0x00, 0x03, 0x02, 0x00, 0x00, 0x03, 0x03},
+		h264.EmulationPreventionAdd([]byte{
+			0x00, 0x00, 0x00,
+			0x00, 0x00, 0x01,
+			0x00, 0x00, 0x02,
+			0x00, 0x00, 0x03,
+		}))
+
+	require.Equal(t,
+		[]byte{0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0x00},
+		h264.EmulationPreventionAdd([]byte{0x00, 0x00, 0x00, 0x00, 0x00}))
+
+	require.Equal(t,
+		[]byte{0x67, 0x42, 0x00},
+		h264.EmulationPreventionAdd([]byte{0x67, 0x42, 0x00}))
+}
+
+func TestEmulationPreventionRoundTrip(t *testing.T) {
+	for _, ca := range casesEmulationPreventionRemove {
+		t.Run(ca.name, func(t *testing.T) {
+			require.Equal(t, ca.unproc, h264.EmulationPreventionRemove(h264.EmulationPreventionAdd(ca.unproc)))
+		})
+	}
+}
+
 func FuzzEmulationPreventionRemove(f *testing.F) {
 	for _, ca := range casesEmulationPreventionRemove {
 		f.Add(ca.proc)

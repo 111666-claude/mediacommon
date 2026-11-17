@@ -34,3 +34,51 @@ func EmulationPreventionRemove(nalu []byte) []byte {
 
 	return ret
 }
+
+// EmulationPreventionAdd adds emulation prevention bytes to a NALU.
+// Specification: ITU-T Rec. H.264, section 7.4.1
+func EmulationPreventionAdd(nalu []byte) []byte {
+	// 0x00 0x00 0x00 -> 0x00 0x00 0x03 0x00
+	// 0x00 0x00 0x01 -> 0x00 0x00 0x03 0x01
+	// 0x00 0x00 0x02 -> 0x00 0x00 0x03 0x02
+	// 0x00 0x00 0x03 -> 0x00 0x00 0x03 0x03
+
+	l := len(nalu)
+	n := l
+	zeros := 0
+
+	for i := 0; i < l; i++ {
+		b := nalu[i]
+		if zeros >= 2 && b <= 0x03 {
+			n++
+			zeros = 0
+		}
+		if b == 0 {
+			zeros++
+		} else {
+			zeros = 0
+		}
+	}
+
+	ret := make([]byte, n)
+	pos := 0
+	zeros = 0
+
+	for i := 0; i < l; i++ {
+		b := nalu[i]
+		if zeros >= 2 && b <= 0x03 {
+			ret[pos] = 0x03
+			pos++
+			zeros = 0
+		}
+		ret[pos] = b
+		pos++
+		if b == 0 {
+			zeros++
+		} else {
+			zeros = 0
+		}
+	}
+
+	return ret
+}

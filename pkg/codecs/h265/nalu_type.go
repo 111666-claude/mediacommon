@@ -98,3 +98,10 @@ func (nt NALUType) String() string {
 	}
 	return fmt.Sprintf("unknown (%d)", nt)
 }
+
+// IsVCL reports whether the NALU type is a Video Coding Layer (VCL) type and therefore
+// carries coded picture data.
+// Specification: ITU-T Rec. H.265, Table 7-1.
+func (nt NALUType) IsVCL() bool {
+	return nt <= 31
+}

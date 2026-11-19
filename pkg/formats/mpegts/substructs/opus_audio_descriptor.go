@@ -44,6 +44,23 @@ var channelConfigTable = map[uint8]int{
 	// 0x89…0xFF: reserved
 }
 
+// predefinedMappings contains the RFC 7845 family 1 channel mapping table
+// implied by each predefined channel_config_code, indexed by channel count.
+// Codes 0x01/0x02 (and the explicit family 0 form) use mapping family 0 and
+// therefore have no table.
+var predefinedMappings = map[int]struct {
+	streamCount        int
+	coupledStreamCount int
+	channelMapping     []byte
+}{
+	3: {2, 1, []byte{0, 2, 1}},
+	4: {2, 2, []byte{0, 1, 2, 3}},
+	5: {3, 2, []byte{0, 4, 1, 2, 3}},
+	6: {4, 2, []byte{0, 4, 1, 2, 3, 5}},
+	7: {5, 2, []byte{0, 4, 1, 2, 3, 5, 6}},
+	8: {5, 3, []byte{0, 6, 1, 4, 5, 2, 3, 7}},
+}
+
 // OpusAudioDescriptor is the opus_audio_descriptor structure.
 // specification: ETSI TS Opus v0.1.3-draft, table 4-2.
 type OpusAudioDescriptor struct {
@@ -209,4 +226,50 @@ func (d *OpusAudioDescriptor) ChannelCount() int {
 	}
 
 	return 0
+}
+
+// checkExplicitMapping verifies that the bit-packed mapping of an explicit
+// (0x81) descriptor can encode every stream index without truncation.
+func (d OpusAudioDescriptor) checkExplicitMapping() error {
+	if d.ChannelConfigCode != 0x81 || d.MappingFamily == 0 {
+		return nil
+	}
+
+	if d.ExplicitChannelCount == 1 {
+		if d.StreamCount != 1 || d.CoupledStreamCount != 0 ||
+			len(d.ChannelMapping) != 1 || d.ChannelMapping[0] != 0 {
+			return fmt.Errorf("invalid single-channel explicit mapping")
+		}
+		return nil
+	}
+
+	if d.StreamCount == 0 {
+		return fmt.Errorf("stream count must not be zero")
+	}
+
+	if d.CoupledStreamCount > d.StreamCount {
+		return fmt.Errorf("coupled stream count (%d) exceeds stream count (%d)",
+			d.CoupledStreamCount, d.StreamCount)
+	}
+
+	if d.StreamCount+d.CoupledStreamCount > 255 {
+		return fmt.Errorf("stream count plus coupled stream count (%d) exceeds 255",
+			d.StreamCount+d.CoupledStreamCount)
+	}
+
+	if len(d.ChannelMapping) != d.ExplicitChannelCount {
+		return fmt.Errorf("channel mapping length is %d, expected %d",
+			len(d.ChannelMapping), d.ExplicitChannelCount)
+	}
+
+	bitsPerMapping := ceilLog2(d.StreamCount + d.CoupledStreamCount + 1)
+	maxValue := 1 << bitsPerMapping
+	for i, idx := range d.ChannelMapping {
+		if int(idx) >= maxValue {
+			return fmt.Errorf("channel mapping index %d at position %d does not fit in %d bits",
+				idx, i, bitsPerMapping)
+		}
+	}
+
+	return nil
 }

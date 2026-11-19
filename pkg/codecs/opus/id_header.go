@@ -44,6 +44,17 @@ func (h *IDHeader) Unmarshal(buf []byte) error {
 	return nil
 }
 
+// ChannelMapping parses the channel mapping carried by the header.
+// Only channel mapping families 0 and 1 are supported.
+func (h *IDHeader) ChannelMapping() (*ChannelMapping, error) {
+	var m ChannelMapping
+	err := m.Unmarshal(h)
+	if err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
 func (h IDHeader) marshalSize() int {
 	return 19 + len(h.ChannelMappingTable)
 }
